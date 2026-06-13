@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "session_id": 1,
+    "user_id": 1,
+    "application": "Chrome",
+    "website": "chatgpt.com",
+    "start_time": "2026-06-14T09:50:00",
+    "end_time": "2026-06-14T10:15:00",
+    "duration": 1500
+  },
+  {
+    "id": 2,
+    "session_id": 2,
+    "user_id": 2,
+    "application": "VS Code",
+    "website": null,
+    "start_time": "2026-06-14T09:30:00",
+    "end_time": null,
+    "duration": null
+  }
+]

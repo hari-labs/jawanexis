@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { Search, SlidersHorizontal, UserPlus, ChevronRight } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
@@ -19,11 +19,48 @@ const filters: { label: string; value: Status | "all" }[] = [
 export function InternManagement() {
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<Status | "all">("all")
+  const [users, setUsers] = useState<any[]>([])
 
-  const filtered = interns.filter((i) => {
+  useEffect(() => {
+      fetch("http://localhost:5000/users")
+          .then(res => res.json())
+          .then(data => {
+
+    const mappedUsers = data.map((u: any) => ({
+        ...u,
+
+        status: "active",
+
+        productivity: 90,
+
+        workHours: 6,
+
+        breakHours: 0.5,
+
+        currentApp: "VS Code",
+
+        currentSite: "github.com",
+
+        task: "Learning Flask",
+
+        lastActive: "Just now",
+
+        avatarColor: "oklch(0.55 0.22 295)",
+
+        timezone: "IST"
+    }))
+
+    setUsers(mappedUsers)
+
+})
+
+  }, [])
+
+
+  const filtered = users.filter((i) => {
     const matchesQuery =
       i.name.toLowerCase().includes(query.toLowerCase()) || i.role.toLowerCase().includes(query.toLowerCase())
-    const matchesFilter = filter === "all" || i.status === filter
+    const matchesFilter = true
     return matchesQuery && matchesFilter
   })
 
