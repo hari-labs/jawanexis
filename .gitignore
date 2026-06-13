@@ -1,15 +1,48 @@
+# ------------------------
+# Frontend
+# ------------------------
+
+frontend/node_modules/
+frontend/dist/
+
 # v0 sandbox internal files
-__v0_runtime_loader.js
-__v0_devtools.tsx
-__v0_jsx-dev-runtime.ts
-.snowflake/
-.v0-trash/
-.vercel/
+frontend/__v0_runtime_loader.js
+frontend/__v0_devtools.tsx
+frontend/__v0_jsx-dev-runtime.ts
+
+frontend/.snowflake/
+frontend/.v0-trash/
+frontend/.vercel/
 
 # Environment variables
-.env*.local
+frontend/.env*.local
 
-# Common ignores
-node_modules
-.next/
+
+# ------------------------
+# Backend
+# ------------------------
+
+backend/venv/
+backend/__pycache__/
+
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+
+backend/.env
+
+
+# ------------------------
+# OS files
+# ------------------------
+
 .DS_Store
+Thumbs.db
+
+
+# ------------------------
+# Editor
+# ------------------------
+
+.vscode/
+.idea/
