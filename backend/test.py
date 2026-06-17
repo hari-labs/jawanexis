@@ -37,7 +37,12 @@ session_result = sessions_collection.insert_one({
 
     "user_id": user_id,
 
-    "start_time": "2026-06-15T09:00:00+00:00",
+    "employee_id": "INT001",
+
+    "device_id": "DESKTOP-001",
+
+    "start_time":
+        "2026-06-15T09:00:00+00:00",
 
     "end_time": None,
 
@@ -47,7 +52,10 @@ session_result = sessions_collection.insert_one({
 
     "idle_minutes": 0,
 
-    "created_at": datetime.now(UTC).isoformat()
+    "created_at":
+        datetime.now(
+            UTC
+        ).isoformat()
 
 })
 
@@ -91,6 +99,8 @@ applications_collection.insert_one({
 
     "start_time": "2026-06-15T09:15:00+00:00",
 
+    "productivity_type": "productive",
+
     "end_time": None,
 
     "duration_seconds": 0,
@@ -117,7 +127,9 @@ websites_collection.insert_one({
 
     "duration_seconds": 0,
 
-    "created_at": datetime.now(UTC).isoformat()
+    "created_at": datetime.now(UTC).isoformat(),
+
+    "productivity_type": "productive"
 
 })
 
