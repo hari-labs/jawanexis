@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   ResponsiveContainer,
   PieChart,
@@ -17,7 +17,8 @@ import { Download, AppWindow, Globe, Gauge, Clock } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { appUsage, siteUsage, productivityTrend, categoryColor } from "@/data/mock"
+import { productivityTrend } from "@/data/mock"
+import { getAppUsage, getSiteUsage, categoryColor } from "@/services/api"
 
 const tabs = [
   { id: "apps", label: "Application usage", icon: AppWindow },
@@ -36,6 +37,16 @@ const categoryTotals = (data: { category: string; minutes: number }[]) => {
 
 export function Reports() {
   const [tab, setTab] = useState<Tab>("apps")
+  const [appUsage, setAppUsage] = useState<any[]>([])
+  const [siteUsage, setSiteUsage] = useState<any[]>([])
+
+  useEffect(() => {
+      getAppUsage()
+          .then(data => setAppUsage(data))
+
+      getSiteUsage()
+          .then(data => setSiteUsage(data))
+  }, [])
 
   return (
     <div>
@@ -90,7 +101,7 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                 <XAxis dataKey="name" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={60} />
                 <YAxis stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${Math.round(v / 60)}h`} />
-                <Tooltip cursor={{ fill: "var(--color-secondary)" }} formatter={(v: number) => [`${Math.round(v / 60)}h ${v % 60}m`, "Time"]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
+                <Tooltip cursor={{ fill: "var(--color-secondary)" }} formatter={(v) => [`${Math.round(Number(v ?? 0) / 60)}h ${Number(v ?? 0) % 60}m`, "Time"]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
                 <Bar dataKey="minutes" radius={[6, 6, 0, 0]} barSize={36}>
                   {sorted.map((d, i) => (
                     <Cell key={i} fill={categoryColor(d.category)} />
@@ -116,7 +127,7 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
                     <Cell key={i} fill={categoryColor(d.category)} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(v: number) => [`${Math.round(v / 60)}h`, ""]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
+                <Tooltip formatter={(v) => [`${Math.round(Number(v ?? 0) / 60)}h`, ""]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -127,7 +138,7 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
                   <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: categoryColor(d.category) }} />
                   {d.category}
                 </span>
-                <span className="font-medium tabular-nums">{Math.round((d.minutes / totalMin) * 100)}%</span>
+                <span className="font-medium tabular-nums">{totalMin === 0 ? 0 : Math.round((d.minutes / totalMin) * 100)}%</span>
               </div>
             ))}
           </div>
@@ -181,7 +192,7 @@ function WorkTimeReport() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
               <XAxis dataKey="day" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
               <YAxis stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}h`} />
-              <Tooltip cursor={{ fill: "var(--color-secondary)" }} formatter={(v: number) => [`${v}h`, "Hours"]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
+              <Tooltip cursor={{ fill: "var(--color-secondary)" }} formatter={(v) => [`${Number(v ?? 0)}h`, "Hours"]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
               <Bar dataKey="hours" radius={[6, 6, 0, 0]} barSize={40} fill="var(--color-primary)" />
             </BarChart>
           </ResponsiveContainer>

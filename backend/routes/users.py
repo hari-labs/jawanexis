@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify
 import json
+from database.mongodb import users_collection
 
 users_bp = Blueprint(
     "users",
@@ -7,11 +8,18 @@ users_bp = Blueprint(
     url_prefix="/users"
 )
 
-
 @users_bp.route("/", methods=["GET"])
 def get_users():
 
-    with open("data/users.json", "r") as file:
-        users = json.load(file)
+    users = []
+
+    for user in users_collection.find():
+
+        user["id"] = str(user["_id"])
+
+        del user["_id"]
+
+        users.append(user)
 
     return jsonify(users)
+

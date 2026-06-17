@@ -1,20 +1,75 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Calendar, ChevronDown, X, Clock, AppWindow, Activity, Camera } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
 import { MockScreenshot } from "@/components/mock-screenshot"
-import { interns, screenshotHours, type Screenshot } from "@/data/mock"
+import { getUsers, getScreenshots } from "@/services/api"
+
+interface Screenshot {
+
+    id: string
+
+    hour: string
+
+    time: string
+
+    app: string
+
+    activity: number
+
+    file_path: string
+
+}
+
+interface ScreenshotGroup {
+
+    hour: string
+
+    shots: Screenshot[]
+
+}
 
 export function Screenshots() {
-  const [internId, setInternId] = useState(interns[0].id)
+  const [users, setUsers] = useState<any[]>([])
+  const [internId, setInternId] = useState("")
+  const [screenshotHours, setScreenshotHours] = useState<ScreenshotGroup[]>([])
+
   const [date, setDate] = useState("2025-06-12")
   const [internOpen, setInternOpen] = useState(false)
   const [preview, setPreview] = useState<Screenshot | null>(null)
 
-  const intern = interns.find((i) => i.id === internId)!
+  useEffect(() => {
+
+      getUsers()
+          .then(data => {
+
+              setUsers(data)
+
+              if (data.length > 0) {
+
+                  setInternId(data[0].id)
+
+              }
+
+          })
+
+      getScreenshots()
+          .then(data => setScreenshotHours(data))
+
+  }, [])
+
+  const intern = users.find((i) => i.id === internId)
   const total = screenshotHours.reduce((a, h) => a + h.shots.length, 0)
+
+
+
+  if (!intern) {
+
+    return <div>Loading...</div>
+
+  }
 
   return (
     <div>
@@ -38,7 +93,7 @@ export function Screenshots() {
           </button>
           {internOpen && (
             <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg sm:w-64">
-              {interns.map((i) => (
+              {users.map((i) => (
                 <button
                   key={i.id}
                   onClick={() => {
@@ -88,7 +143,13 @@ export function Screenshots() {
                   className="group overflow-hidden rounded-xl border border-border bg-card text-left shadow-sm transition-shadow hover:shadow-md"
                 >
                   <div className="relative aspect-video">
-                    <MockScreenshot app={shot.app} />
+                    <img
+                      src={`http://localhost:5000/${shot.file_path}`}
+
+                      alt={shot.app}
+                      
+                      className="h-full w-full object-cover"
+                    />
                     <span className="absolute right-2 top-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
                       {shot.time}
                     </span>
@@ -136,7 +197,13 @@ export function Screenshots() {
               </button>
             </div>
             <div className="aspect-video">
-              <MockScreenshot app={preview.app} />
+              <img
+                  src={`http://localhost:5000/${preview.file_path}`}
+
+                  alt={preview.app}
+
+                  className="h-full w-full object-cover"
+              />
             </div>
             <div className="flex items-center gap-6 px-5 py-3 text-sm">
               <span className="flex items-center gap-1.5 text-muted-foreground">

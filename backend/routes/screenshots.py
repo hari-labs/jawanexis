@@ -1,5 +1,7 @@
 from flask import Blueprint, jsonify
-import json
+
+from database.mongodb import screenshots_collection
+
 
 screenshots_bp = Blueprint(
     "screenshots",
@@ -11,7 +13,8 @@ screenshots_bp = Blueprint(
 @screenshots_bp.route("/", methods=["GET"])
 def get_screenshots():
 
-    with open("data/screenshots.json", "r") as file:
-        screenshots = json.load(file)
+    screenshots = list(
+        screenshots_collection.find({}, {"_id": 0})
+    )
 
     return jsonify(screenshots)

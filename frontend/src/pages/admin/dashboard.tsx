@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   ResponsiveContainer,
@@ -18,22 +19,72 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Avatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
-  interns,
-  productivityTrend,
-  appUsage,
-  siteUsage,
-  recentActivity,
-  categoryColor,
+    getUsers,
+    getRecentActivity,
+    getAppUsage,
+    getSiteUsage,
+    categoryColor
+} from "@/services/api"
+import {
+    productivityTrend
 } from "@/data/mock"
 
-const activeCount = interns.filter((i) => i.status === "active").length
-const avgProd = Math.round(interns.reduce((a, i) => a + i.productivity, 0) / interns.length)
-const totalHours = interns.reduce((a, i) => a + i.workHours, 0).toFixed(0)
-
-const topApps = [...appUsage].sort((a, b) => b.minutes - a.minutes).slice(0, 5)
-const topSites = [...siteUsage].sort((a, b) => b.minutes - a.minutes).slice(0, 5)
 
 export function AdminDashboard() {
+  const [users, setUsers] = useState<any[]>([])
+  const [recentActivity, setRecentActivity] = useState<any[]>([])
+  const [appUsage, setAppUsage] = useState<any[]>([])
+  const [siteUsage, setSiteUsage] = useState<any[]>([])
+
+  useEffect(() => {
+
+      getUsers()
+          .then(data => setUsers(data))
+
+      getRecentActivity()
+          .then(data => setRecentActivity(data))
+
+      getAppUsage()
+          .then(data => setAppUsage(data))
+
+      getSiteUsage()
+          .then(data => setSiteUsage(data))
+
+  }, [])
+
+  const activeCount =
+      users.filter((i) => i.status === "active").length
+
+  const avgProd =
+      users.length === 0
+
+      ? 0
+
+      : Math.round(
+
+          users.reduce(
+              (a, i) => a + i.productivity,
+              0
+          ) / users.length
+
+      )
+
+  const totalHours =
+      users.reduce(
+          (a, i) => a + i.workHours,
+          0
+      ).toFixed(0)
+
+  const topApps =
+      [...appUsage]
+          .sort((a, b) => b.minutes - a.minutes)
+          .slice(0, 5)
+
+  const topSites =
+      [...siteUsage]
+          .sort((a, b) => b.minutes - a.minutes)
+          .slice(0, 5)
+
   return (
     <div>
       <PageHeader title="Dashboard" description="Real-time overview of your intern program's productivity.">
@@ -46,7 +97,7 @@ export function AdminDashboard() {
       </PageHeader>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Total interns" value={String(interns.length)} delta="2" trend="up" icon={Users} />
+        <StatCard label="Total interns" value={String(users.length)} delta="2" trend="up" icon={Users} />
         <StatCard label="Active now" value={String(activeCount)} delta="3" trend="up" icon={Activity} />
         <StatCard label="Avg productivity" value={`${avgProd}%`} delta="4%" trend="up" icon={Gauge} />
         <StatCard label="Work hours today" value={`${totalHours}h`} delta="6%" trend="up" icon={Clock} />
@@ -101,7 +152,7 @@ export function AdminDashboard() {
           <CardContent>
             <ul className="flex flex-col gap-4">
               {recentActivity.slice(0, 6).map((e) => {
-                const intern = interns.find((i) => i.id === e.internId)
+                const intern = users.find((i) => i.id === e.internId)
                 return (
                   <li key={e.id} className="flex items-start gap-3">
                     <Avatar name={e.intern} color={intern?.avatarColor} size={32} />
@@ -154,7 +205,7 @@ function UsageCard({
               <YAxis type="category" dataKey="name" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} width={92} />
               <Tooltip
                 cursor={{ fill: "var(--color-secondary)" }}
-                formatter={(v: number) => [`${Math.round(v / 60)}h ${v % 60}m`, "Time"]}
+                formatter={(v) => [`${Math.round(Number(v ?? 0) / 60)}h ${Number(v ?? 0) % 60}m`, "Time"]}
                 contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }}
               />
               <Bar dataKey="minutes" radius={[0, 6, 6, 0]} barSize={18}>

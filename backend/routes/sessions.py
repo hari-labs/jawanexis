@@ -1,5 +1,7 @@
 from flask import Blueprint, jsonify
-import json
+
+from database.mongodb import sessions_collection
+
 
 sessions_bp = Blueprint(
     "sessions",
@@ -11,7 +13,8 @@ sessions_bp = Blueprint(
 @sessions_bp.route("/", methods=["GET"])
 def get_sessions():
 
-    with open("data/sessions.json", "r") as file:
-        sessions = json.load(file)
+    sessions = list(
+        sessions_collection.find({}, {"_id": 0})
+    )
 
     return jsonify(sessions)

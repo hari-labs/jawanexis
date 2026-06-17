@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar } from "@/components/ui/avatar"
 import { StatusBadge } from "@/components/status-badge"
 import { ProductivityRing } from "@/components/productivity-ring"
-import { interns, type Status } from "@/data/mock"
+import { getUsers, type Status } from "@/services/api"
 
 const filters: { label: string; value: Status | "all" }[] = [
   { label: "All", value: "all" },
@@ -22,51 +22,21 @@ export function InternManagement() {
   const [users, setUsers] = useState<any[]>([])
 
   useEffect(() => {
-      fetch("http://localhost:5000/users")
-          .then(res => res.json())
-          .then(data => {
-
-    const mappedUsers = data.map((u: any) => ({
-        ...u,
-
-        status: "active",
-
-        productivity: 90,
-
-        workHours: 6,
-
-        breakHours: 0.5,
-
-        currentApp: "VS Code",
-
-        currentSite: "github.com",
-
-        task: "Learning Flask",
-
-        lastActive: "Just now",
-
-        avatarColor: "oklch(0.55 0.22 295)",
-
-        timezone: "IST"
-    }))
-
-    setUsers(mappedUsers)
-
-})
-
+      getUsers()
+        .then(data => setUsers(data))
   }, [])
 
 
   const filtered = users.filter((i) => {
     const matchesQuery =
       i.name.toLowerCase().includes(query.toLowerCase()) || i.role.toLowerCase().includes(query.toLowerCase())
-    const matchesFilter = true
+    const matchesFilter = filter === "all" || i.status === filter
     return matchesQuery && matchesFilter
   })
 
   return (
     <div>
-      <PageHeader title="Intern Management" description={`${interns.length} interns in your program`}>
+      <PageHeader title="Intern Management" description={`${users.length} interns in your program`}>
         <Link to="/admin/interns/invite">
           <Button>
             <UserPlus className="h-4 w-4" />

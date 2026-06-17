@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { useParams, Link, useNavigate } from "react-router-dom"
 import {
   ResponsiveContainer,
@@ -26,14 +27,28 @@ import { Avatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { ProductivityRing } from "@/components/productivity-ring"
-import { interns, productivityTrend, recentActivity } from "@/data/mock"
+import { productivityTrend } from "@/data/mock"
+import { getUsers, getRecentActivity} from "@/services/api"
 
 export function InternDetails() {
+  const [users, setUsers] = useState<any[]>([])
+  const [recentActivity, setRecentActivity] = useState<any[]>([])
   const { id } = useParams()
   const navigate = useNavigate()
-  const intern = interns.find((i) => i.id === id)
 
-  if (!intern) {
+  useEffect(() => {
+
+      getUsers()
+          .then(data => setUsers(data))
+
+      getRecentActivity()
+          .then(data => setRecentActivity(data))
+
+  }, [])
+
+  const user = users.find((i) => i.id === id)
+
+  if (!user) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
         <p className="text-lg font-semibold">Intern not found</p>
@@ -42,18 +57,18 @@ export function InternDetails() {
     )
   }
 
-  const activity = recentActivity.filter((e) => e.internId === intern.id)
+  const activity = recentActivity.filter((e) => e.internId === user.id)
   const infoItems = [
-    { icon: Mail, label: "Email", value: intern.email },
-    { icon: MapPin, label: "Timezone", value: intern.timezone },
-    { icon: Calendar, label: "Joined", value: intern.joinedDate },
+    { icon: Mail, label: "Email", value: user.email },
+    { icon: MapPin, label: "Timezone", value: user.timezone },
+    { icon: Calendar, label: "Joined", value: user.joinedDate },
   ]
   const metrics = [
-    { icon: AppWindow, label: "Current app", value: intern.currentApp },
-    { icon: Globe, label: "Current site", value: intern.currentSite },
-    { icon: ListChecks, label: "Assigned task", value: intern.task },
-    { icon: Clock, label: "Work time", value: `${intern.workHours}h` },
-    { icon: Coffee, label: "Break time", value: `${intern.breakHours}h` },
+    { icon: AppWindow, label: "Current app", value: user.currentApp },
+    { icon: Globe, label: "Current site", value: user.currentSite },
+    { icon: ListChecks, label: "Assigned task", value: user.task },
+    { icon: Clock, label: "Work time", value: `${user.workHours}h` },
+    { icon: Coffee, label: "Break time", value: `${user.breakHours}h` },
   ]
 
   return (
@@ -67,19 +82,19 @@ export function InternDetails() {
       <Card className="mb-4">
         <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
-            <Avatar name={intern.name} color={intern.avatarColor} size={60} />
+            <Avatar name={user.name} color={user.avatarColor} size={60} />
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">{intern.name}</h1>
-              <p className="text-sm text-muted-foreground">{intern.role}</p>
+              <h1 className="text-xl font-semibold tracking-tight">{user.name}</h1>
+              <p className="text-sm text-muted-foreground">{user.role}</p>
               <div className="mt-2 flex items-center gap-2">
-                <StatusBadge status={intern.status} />
-                <span className="text-xs text-muted-foreground">Active {intern.lastActive.toLowerCase()}</span>
+                <StatusBadge status={user.status} />
+                <span className="text-xs text-muted-foreground">Active {user.lastActive.toLowerCase()}</span>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-center">
-              <ProductivityRing value={intern.productivity} size={56} />
+              <ProductivityRing value={user.productivity} size={56} />
               <p className="mt-1 text-xs text-muted-foreground">Productivity</p>
             </div>
             <Link to="/admin/screenshots">
