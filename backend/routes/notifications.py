@@ -1,6 +1,10 @@
 from flask import Blueprint, request, jsonify
 from database.mongodb import notifications_collection
 
+from bson import ObjectId
+
+from utils.serializer import serialize_doc
+
 notifications_bp = Blueprint(
     "notifications",
     __name__
@@ -26,11 +30,8 @@ def get_notifications():
     notifications = []
 
     for notification in notifications_collection.find():
-
-        notification["_id"] = str(
-            notification["_id"]
+        notifications.append(
+            serialize_doc(notification)
         )
-
-        notifications.append(notification)
 
     return jsonify(notifications)

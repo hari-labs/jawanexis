@@ -2,6 +2,9 @@ from flask import Blueprint, jsonify
 import json
 from database.mongodb import users_collection
 
+from bson import ObjectId
+from utils.serializer import serialize_doc
+
 users_bp = Blueprint(
     "users",
     __name__,

@@ -1,5 +1,9 @@
 from flask import Blueprint, request, jsonify
 
+from bson import ObjectId
+
+from utils.serializer import serialize_doc
+
 auth_bp = Blueprint(
     "auth",
     __name__,

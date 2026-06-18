@@ -1,6 +1,10 @@
 from flask import Blueprint, request, jsonify
 from database.mongodb import audit_logs_collection
 
+
+from bson import ObjectId
+from utils.serializer import serialize_doc
+
 audit_logs_bp = Blueprint(
     "audit_logs",
     __name__

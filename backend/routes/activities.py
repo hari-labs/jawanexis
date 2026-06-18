@@ -3,6 +3,10 @@ from database.mongodb import activities_collection
 
 activities_bp = Blueprint("activities", __name__)
 
+from bson import ObjectId
+
+from utils.serializer import serialize_doc
+
 
 @activities_bp.route("/", methods=["POST"])
 def create_activity():
@@ -23,9 +27,8 @@ def get_activities():
     activities = []
 
     for activity in activities_collection.find():
-
-        activity["_id"] = str(activity["_id"])
-
-        activities.append(activity)
+        activities.append(
+            serialize_doc(activity)
+        )
 
     return jsonify(activities)
