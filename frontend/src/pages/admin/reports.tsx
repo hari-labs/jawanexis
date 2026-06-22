@@ -17,8 +17,8 @@ import { Download, AppWindow, Globe, Gauge, Clock } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { productivityTrend } from "@/data/mock"
-import { getAppUsage, getSiteUsage, categoryColor } from "@/services/api"
+import { getAppUsage, getSiteUsage, categoryColor, getProductivityTrend, getWorkTimeTrend } from "@/services/api"
+
 
 const tabs = [
   { id: "apps", label: "Application usage", icon: AppWindow },
@@ -149,6 +149,13 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
 }
 
 function ProductivityReport() {
+  const [data, setData] = useState<any[]>([])
+
+  useEffect(() => {
+    getProductivityTrend()
+      .then(res => setData(res))
+  }, [])
+
   return (
     <Card>
       <CardHeader>
@@ -158,7 +165,7 @@ function ProductivityReport() {
       <CardContent>
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={productivityTrend} margin={{ left: -20, right: 8, top: 8 }}>
+            <AreaChart data={data} margin={{ left: -20, right: 8, top: 8 }}>
               <defs>
                 <linearGradient id="rep-prod" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.3} />
@@ -179,6 +186,13 @@ function ProductivityReport() {
 }
 
 function WorkTimeReport() {
+  const [data, setData] = useState<any[]>([])
+
+  useEffect(() => {
+    getWorkTimeTrend()
+      .then(res => setData(res))
+  }, [])
+
   return (
     <Card>
       <CardHeader>
@@ -188,12 +202,12 @@ function WorkTimeReport() {
       <CardContent>
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={productivityTrend} margin={{ left: -20, right: 8, top: 8 }}>
+            <BarChart data={data} margin={{ left: -20, right: 8, top: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
               <XAxis dataKey="day" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
               <YAxis stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}h`} />
               <Tooltip cursor={{ fill: "var(--color-secondary)" }} formatter={(v) => [`${Number(v ?? 0)}h`, "Hours"]} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", fontSize: 13 }} />
-              <Bar dataKey="hours" radius={[6, 6, 0, 0]} barSize={40} fill="var(--color-primary)" />
+              <Bar dataKey="work_hours" radius={[6, 6, 0, 0]} barSize={40} fill="var(--color-primary)" />
             </BarChart>
           </ResponsiveContainer>
         </div>

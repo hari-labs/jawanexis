@@ -1,5 +1,6 @@
-import { useState } from "react"
-import { NavLink, Outlet, useLocation } from "react-router-dom"
+import { useState, useEffect } from "react"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { logoutUser } from "@/services/api"
 import {
   LayoutDashboard,
   Users,
@@ -14,36 +15,109 @@ import {
   X,
   Zap,
   ArrowLeftRight,
+  Mail,
+  FolderKanban,
+  UserCheck,
+  LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/ui/avatar"
 
-type Role = "admin" | "intern"
+type Role = "admin" | "team_lead" | "intern"
 
 const adminNav = [
   { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/admin/interns", label: "Interns", icon: Users },
+  { to: "/admin/users", label: "Users", icon: Users },
+  { to: "/admin/invitations", label: "Invitations", icon: Mail },
+  { to: "/admin/projects", label: "Projects", icon: FolderKanban },
+  { to: "/admin/analytics", label: "Analytics", icon: FileBarChart },
   { to: "/admin/screenshots", label: "Screenshots", icon: Camera },
-  { to: "/admin/reports", label: "Reports", icon: FileBarChart },
   { to: "/admin/settings", label: "Settings", icon: Settings },
+]
+
+const teamLeadNav = [
+  { to: "/team-lead", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/team-lead/activity", label: "Activity", icon: Activity },
+  { to: "/team-lead/projects", label: "My Projects", icon: FolderKanban },
+  { to: "/team-lead/analytics", label: "Team Analytics", icon: FileBarChart },
+  { to: "/team-lead/screenshots", label: "Team Screenshots", icon: Camera },
 ]
 
 const internNav = [
   { to: "/intern", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/intern/tasks", label: "Tasks", icon: ListChecks },
   { to: "/intern/activity", label: "Activity", icon: Activity },
-  { to: "/intern/settings", label: "Settings", icon: Settings },
+  { to: "/intern/projects", label: "Projects", icon: FolderKanban },
+  { to: "/intern/screenshots", label: "Screenshots", icon: Camera },
 ]
 
 export function AppLayout({ role }: { role: Role }) {
   const [open, setOpen] = useState(false)
   const location = useLocation()
-  const nav = role === "admin" ? adminNav : internNav
+  const navigate = useNavigate()
+  const nav = role === "admin" ? adminNav : (role === "team_lead" ? teamLeadNav : internNav)
   const switchTo = role === "admin" ? "/intern" : "/admin"
-  const user =
-    role === "admin"
-      ? { name: "Jordan Wells", sub: "Program Admin", color: "oklch(0.55 0.22 295)" }
-      : { name: "Amelia Cho", sub: "Frontend Intern", color: "oklch(0.55 0.22 295)" }
+  const [currentUser, setCurrentUser] = useState<any>(null)
+
+  useEffect(() => {
+    const storedUserStr = localStorage.getItem("user")
+    if (!storedUserStr) {
+      navigate("/", { replace: true })
+      return
+    }
+    try {
+      const parsedUser = JSON.parse(storedUserStr)
+      
+      // Perform live re-validation of user role and activation status
+      fetch(`http://localhost:5000/auth/me/${parsedUser.id}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.user) {
+            const updatedUser = data.user
+            if (updatedUser.role !== parsedUser.role || !updatedUser.is_active) {
+              if (!updatedUser.is_active) {
+                localStorage.removeItem("user")
+                navigate("/", { replace: true })
+                return
+              }
+              localStorage.setItem("user", JSON.stringify(updatedUser))
+              if (updatedUser.role === "admin") navigate("/admin", { replace: true })
+              else if (updatedUser.role === "team_lead") navigate("/team-lead", { replace: true })
+              else navigate("/intern", { replace: true })
+              return
+            }
+          }
+        }).catch(() => {})
+
+      if (parsedUser.role !== role) {
+        if (parsedUser.role === "admin") navigate("/admin", { replace: true })
+        else if (parsedUser.role === "team_lead") navigate("/team-lead", { replace: true })
+        else navigate("/intern", { replace: true })
+        return
+      }
+      setCurrentUser(parsedUser)
+    } catch (e) {
+      localStorage.removeItem("user")
+      navigate("/", { replace: true })
+    }
+  }, [role, navigate])
+
+  const handleLogout = async () => {
+    try {
+      await logoutUser()
+    } catch (e) {}
+    localStorage.removeItem("user")
+    navigate("/", { replace: true })
+  }
+
+  const user = currentUser
+    ? {
+        name: currentUser.name,
+        sub: currentUser.role === "admin"
+          ? "Program Admin"
+          : (currentUser.role === "team_lead" ? "Team Lead" : "Workspace Intern"),
+        color: currentUser.avatarColor || "oklch(0.55 0.22 295)"
+      }
+    : { name: "Guest User", sub: "Workspace Member", color: "oklch(0.55 0.22 295)" }
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -71,7 +145,7 @@ export function AppLayout({ role }: { role: Role }) {
 
         <div className="px-3 pb-2">
           <p className="px-3 pb-2 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {role === "admin" ? "Administration" : "Workspace"}
+            {role === "admin" ? "Administration" : (role === "team_lead" ? "Management" : "Workspace")}
           </p>
           <nav className="flex flex-col gap-1">
             {nav.map((item) => (
@@ -96,15 +170,24 @@ export function AppLayout({ role }: { role: Role }) {
           </nav>
         </div>
 
-        <div className="mt-auto p-3">
-          <NavLink
-            to={switchTo}
-            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
+        <div className="mt-auto p-3 flex flex-col gap-2">
+          {currentUser && currentUser.role === "admin" && (
+            <NavLink
+              to={switchTo}
+              className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary"
+            >
+              <ArrowLeftRight className="h-[18px] w-[18px]" />
+              Switch to {role === "admin" ? "Intern" : "Admin"}
+            </NavLink>
+          )}
+          <button
+            onClick={handleLogout}
+            className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10"
           >
-            <ArrowLeftRight className="h-[18px] w-[18px]" />
-            Switch to {role === "admin" ? "Intern" : "Admin"}
-          </NavLink>
-          <div className="mt-3 flex items-center gap-3 rounded-lg px-3 py-2">
+            <LogOut className="h-[18px] w-[18px]" />
+            Sign Out
+          </button>
+          <div className="mt-1 flex items-center gap-3 rounded-lg px-3 py-2">
             <Avatar name={user.name} color={user.color} size={36} />
             <div className="min-w-0 leading-tight">
               <p className="truncate text-sm font-medium">{user.name}</p>

@@ -26,8 +26,24 @@ def get_websites():
 
 @websites_bp.route("/", methods=["POST"])
 def create_website():
-
-    data = request.json
+    data = dict(request.json or {})
+    
+    domain = data.get("domain") or data.get("website") or "Unknown"
+    title = data.get("title") or data.get("page_title") or ""
+    dur = data.get("duration_seconds") or data.get("duration") or 0
+    try:
+        dur = int(dur)
+    except (ValueError, TypeError):
+        dur = 0
+        
+    data["domain"] = domain
+    data["website"] = domain
+    data["title"] = title
+    data["page_title"] = title
+    data["duration_seconds"] = dur
+    
+    from utils.serializer import populate_user_details
+    populate_user_details(data)
 
     result = websites_collection.insert_one(data)
 

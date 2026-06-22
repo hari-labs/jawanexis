@@ -1,11 +1,19 @@
 import { SettingsScreen } from "@/components/settings-screen"
 
 export function AdminSettings() {
+  const currentUser = JSON.parse(localStorage.getItem("user") || "{}")
+  const userObj = {
+    name: currentUser.name || "System Admin",
+    email: currentUser.email || "admin@workspace.io",
+    role: currentUser.role === "admin" ? "Program Admin" : (currentUser.role === "team_lead" ? "Team Lead" : "Intern"),
+    color: currentUser.avatarColor || "oklch(0.55 0.22 295)"
+  }
+
   return (
     <SettingsScreen
       title="Settings"
       description="Manage your workspace, monitoring policies, and notifications."
-      user={{ name: "Jordan Wells", email: "jordan.wells@nova.io", role: "Program Admin", color: "oklch(0.55 0.22 295)" }}
+      user={userObj}
       sections={[
         {
           title: "Monitoring policy",

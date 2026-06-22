@@ -1,14 +1,19 @@
 import { SettingsScreen } from "@/components/settings-screen"
-import { interns } from "@/data/mock"
-
-const me = interns[0]
 
 export function InternSettings() {
+  const currentUser = JSON.parse(localStorage.getItem("user") || "{}")
+  const userObj = {
+    name: currentUser.name || "Intern User",
+    email: currentUser.email || "intern@workspace.io",
+    role: currentUser.role === "admin" ? "Program Admin" : (currentUser.role === "team_lead" ? "Team Lead" : "Intern"),
+    color: currentUser.avatarColor || "oklch(0.55 0.22 295)"
+  }
+
   return (
     <SettingsScreen
       title="Settings"
       description="Manage your profile and tracking preferences."
-      user={{ name: me.name, email: me.email, role: me.role, color: me.avatarColor }}
+      user={userObj}
       sections={[
         {
           title: "Tracking preferences",

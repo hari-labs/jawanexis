@@ -8,19 +8,18 @@ import { MockScreenshot } from "@/components/mock-screenshot"
 import { getUsers, getScreenshots } from "@/services/api"
 
 interface Screenshot {
-
     id: string
-
     hour: string
-
     time: string
-
     app: string
-
+    window_title?: string
     activity: number
-
     file_path: string
-
+    user_name?: string
+    session_id?: string
+    captured_at?: string
+    cloudinary_url?: string
+    uploaded_to_cloud?: boolean
 }
 
 interface ScreenshotGroup {
@@ -36,29 +35,37 @@ export function Screenshots() {
   const [internId, setInternId] = useState("")
   const [screenshotHours, setScreenshotHours] = useState<ScreenshotGroup[]>([])
 
-  const [date, setDate] = useState("2025-06-12")
+  const getLocalDateString = () => {
+    const d = new Date()
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
+  }
+
+  const [date, setDate] = useState(getLocalDateString())
   const [internOpen, setInternOpen] = useState(false)
   const [preview, setPreview] = useState<Screenshot | null>(null)
 
   useEffect(() => {
-
       getUsers()
           .then(data => {
-
               setUsers(data)
-
               if (data.length > 0) {
-
                   setInternId(data[0].id)
-
               }
-
           })
-
-      getScreenshots()
-          .then(data => setScreenshotHours(data))
-
   }, [])
+
+  useEffect(() => {
+      if (!internId) return;
+      getScreenshots(internId, date)
+          .then(data => {
+            // sort groups newest first
+            const sorted = [...data].sort((a: ScreenshotGroup, b: ScreenshotGroup) => b.hour.localeCompare(a.hour))
+            setScreenshotHours(sorted)
+          })
+  }, [internId, date])
 
   const intern = users.find((i) => i.id === internId)
   const total = screenshotHours.reduce((a, h) => a + h.shots.length, 0)
@@ -144,7 +151,7 @@ export function Screenshots() {
                 >
                   <div className="relative aspect-video">
                     <img
-                      src={`http://localhost:5000/${shot.file_path}`}
+                      src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
 
                       alt={shot.app}
                       
@@ -154,17 +161,29 @@ export function Screenshots() {
                       {shot.time}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between px-3 py-2">
-                    <span className="flex items-center gap-1.5 text-xs font-medium">
-                      <AppWindow className="h-3.5 w-3.5 text-muted-foreground" />
-                      {shot.app}
-                    </span>
-                    <span
-                      className="text-xs font-semibold tabular-nums"
-                      style={{ color: shot.activity >= 70 ? "oklch(0.55 0.15 150)" : shot.activity >= 40 ? "oklch(0.6 0.13 65)" : "oklch(0.6 0.2 25)" }}
-                    >
-                      {shot.activity}%
-                    </span>
+                  <div className="px-3 py-2 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-foreground truncate max-w-[120px]" title={shot.user_name}>
+                        {shot.user_name || "Unknown"}
+                      </span>
+                      <span
+                        className="text-xs font-semibold tabular-nums"
+                        style={{ color: shot.activity >= 70 ? "oklch(0.55 0.15 150)" : shot.activity >= 40 ? "oklch(0.6 0.13 65)" : "oklch(0.6 0.2 25)" }}
+                      >
+                        {shot.activity}%
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span className="truncate max-w-[110px]" title={shot.app}>
+                        {shot.app}
+                      </span>
+                      <span className="font-mono">
+                        {shot.captured_at ? new Date(shot.captured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : shot.time}
+                      </span>
+                    </div>
+                    <div className="text-[9px] font-mono text-muted-foreground/80 truncate">
+                      Sess: {shot.session_id || "N/A"}
+                    </div>
                   </div>
                 </button>
               ))}
@@ -182,10 +201,12 @@ export function Screenshots() {
           <div className="w-full max-w-3xl overflow-hidden rounded-2xl bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div className="flex items-center gap-3">
-                <Avatar name={intern.name} color={intern.avatarColor} size={32} />
+                <Avatar name={preview.user_name || intern.name} color={intern.avatarColor} size={32} />
                 <div className="leading-tight">
-                  <p className="text-sm font-semibold">{intern.name}</p>
-                  <p className="text-xs text-muted-foreground">{preview.app} · {preview.time}</p>
+                  <p className="text-sm font-semibold">{preview.user_name || intern.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {preview.app} {preview.window_title ? `— ${preview.window_title}` : ""} · {preview.time}
+                  </p>
                 </div>
               </div>
               <button
@@ -198,14 +219,14 @@ export function Screenshots() {
             </div>
             <div className="aspect-video">
               <img
-                  src={`http://localhost:5000/${preview.file_path}`}
+                  src={preview.cloudinary_url || `http://localhost:5000/${preview.file_path}`}
 
                   alt={preview.app}
 
                   className="h-full w-full object-cover"
               />
             </div>
-            <div className="flex items-center gap-6 px-5 py-3 text-sm">
+            <div className="flex flex-wrap items-center gap-6 px-5 py-3 text-sm">
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Activity className="h-4 w-4" />
                 Activity level
@@ -213,7 +234,10 @@ export function Screenshots() {
               </span>
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Clock className="h-4 w-4" />
-                Captured at <span className="font-semibold text-foreground">{preview.time}</span>
+                Captured at <span className="font-semibold text-foreground">{preview.captured_at ? new Date(preview.captured_at).toLocaleString() : preview.time}</span>
+              </span>
+              <span className="flex items-center gap-1.5 text-muted-foreground font-mono text-xs">
+                Session: <span className="font-semibold text-foreground">{preview.session_id || "N/A"}</span>
               </span>
             </div>
           </div>

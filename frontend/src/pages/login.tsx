@@ -1,14 +1,38 @@
 import { useNavigate, Link } from "react-router-dom"
 import { Zap, Mail, Lock, ArrowRight, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { login } from "@/services/api"
 
 export function Login({ role }: { role: "admin" | "intern" }) {
   const navigate = useNavigate()
   const isAdmin = role === "admin"
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    navigate(isAdmin ? "/admin" : "/intern")
+    const target = e.target as typeof e.target & {
+      email: { value: string }
+      password: { value: string }
+    }
+    const email = target.email.value
+    const password = target.password.value
+
+    try {
+      const res = await login(email, password)
+      if (res.success) {
+        localStorage.setItem("user", JSON.stringify(res.user))
+        if (res.role === "admin") {
+          navigate("/admin")
+        } else if (res.role === "team_lead") {
+          navigate("/team-lead")
+        } else {
+          navigate("/intern")
+        }
+      } else {
+        alert(res.message || "Invalid credentials")
+      }
+    } catch (err) {
+      alert("Invalid email or password.")
+    }
   }
 
   return (
@@ -45,7 +69,7 @@ export function Login({ role }: { role: "admin" | "intern" }) {
                 <input
                   id="email"
                   type="email"
-                  defaultValue={isAdmin ? "jordan.wells@nova.io" : "amelia.cho@nova.io"}
+                  defaultValue=""
                   className="h-11 w-full rounded-lg border border-border bg-secondary/40 pl-9 pr-3 text-sm outline-none focus:border-ring focus:bg-card"
                 />
               </div>
@@ -64,7 +88,7 @@ export function Login({ role }: { role: "admin" | "intern" }) {
                 <input
                   id="password"
                   type="password"
-                  defaultValue="demo-password"
+                  defaultValue=""
                   className="h-11 w-full rounded-lg border border-border bg-secondary/40 pl-9 pr-3 text-sm outline-none focus:border-ring focus:bg-card"
                 />
               </div>

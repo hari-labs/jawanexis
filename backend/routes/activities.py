@@ -12,6 +12,8 @@ from utils.serializer import serialize_doc
 def create_activity():
 
     data = request.json
+    from utils.serializer import populate_user_details
+    populate_user_details(data)
 
     result = activities_collection.insert_one(data)
 

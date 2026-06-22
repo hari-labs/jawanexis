@@ -1,0 +1,524 @@
+from flask import Blueprint, request, jsonify
+from database.mongodb import tasks_collection, task_evidence_collection, users_collection, projects_collection
+from bson import ObjectId
+from datetime import datetime
+import os
+from utils.serializer import serialize_doc
+
+tasks_bp = Blueprint("tasks", __name__)
+
+def get_caller_user():
+    caller_id = request.headers.get("X-User-Id")
+    if not caller_id:
+        return None
+    try:
+        if ObjectId.is_valid(caller_id):
+            user = users_collection.find_one({"_id": ObjectId(caller_id)})
+            if user:
+                user["id"] = str(user["_id"])
+                return user
+        user = users_collection.find_one({"_id": caller_id})
+        if user:
+            user["id"] = str(user["_id"])
+            return user
+    except Exception:
+        pass
+    return None
+
+@tasks_bp.route("/", methods=["GET"])
+def get_all_tasks_global():
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    query = {}
+    if caller_role == "intern":
+        query = {"assigned_to": caller_id}
+        if ObjectId.is_valid(caller_id):
+            query = {"$or": [{"assigned_to": caller_id}, {"assigned_to": ObjectId(caller_id)}]}
+    elif caller_role == "team_lead":
+        # Find projects led by this lead
+        proj_lead_query = {"lead_id": caller_id}
+        if ObjectId.is_valid(caller_id):
+            proj_lead_query = {"$or": [{"lead_id": caller_id}, {"lead_id": ObjectId(caller_id)}]}
+        led_project_ids = [str(p["_id"]) for p in projects_collection.find(proj_lead_query)]
+        
+        query = {"project_id": {"$in": led_project_ids}}
+        proj_oids = [ObjectId(pid) for pid in led_project_ids if ObjectId.is_valid(pid)]
+        if proj_oids:
+            query = {"$or": [{"project_id": {"$in": led_project_ids}}, {"project_id": {"$in": proj_oids}}]}
+            
+    tasks = []
+    for task in tasks_collection.find(query):
+        task = serialize_doc(task)
+        
+        # Resolve names
+        assigned_to = task.get("assigned_to")
+        if assigned_to:
+            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
+            if u:
+                task["assigned_to_name"] = u.get("name")
+                
+        assigned_by = task.get("assigned_by")
+        if assigned_by:
+            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
+            if u:
+                task["assigned_by_name"] = u.get("name")
+                
+        p_id = task.get("project_id")
+        if p_id:
+            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
+            if p:
+                task["project_name"] = p.get("name")
+                
+        tasks.append(task)
+    return jsonify(tasks)
+
+@tasks_bp.route("/project/<project_id>", methods=["GET"])
+def get_project_tasks(project_id):
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found"}), 404
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    lead_id_str = str(project.get("lead_id", ""))
+    member_ids_str = [str(mid) for mid in project.get("member_ids", [])]
+    
+    # Membership check
+    if caller_role == "intern" and caller_id not in member_ids_str:
+        return jsonify({"success": False, "message": "Forbidden: You do not belong to this project"}), 403
+    
+    if caller_role == "team_lead" and caller_id != lead_id_str:
+        return jsonify({"success": False, "message": "Forbidden: You are not the Team Lead of this project"}), 403
+
+    query = {"project_id": project_id}
+    if ObjectId.is_valid(project_id):
+        query = {"$or": [{"project_id": project_id}, {"project_id": ObjectId(project_id)}]}
+        
+    tasks = []
+    for task in tasks_collection.find(query):
+        task = serialize_doc(task)
+        
+        # Interns may only view tasks assigned to themselves
+        assigned_to_str = str(task.get("assigned_to", ""))
+        if caller_role == "intern" and assigned_to_str != caller_id:
+            continue
+            
+        # Populate assignee info
+        assigned_to = task.get("assigned_to")
+        if assigned_to:
+            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
+            if u:
+                task["assigned_to_name"] = u.get("name")
+                
+        assigned_by = task.get("assigned_by")
+        if assigned_by:
+            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
+            if u:
+                task["assigned_by_name"] = u.get("name")
+
+        # Resolve evidence details
+        evidence = task_evidence_collection.find_one(
+            {"task_id": ObjectId(task["_id"])},
+            sort=[("submitted_at", -1)]
+        )
+        if evidence:
+            task["evidence"] = serialize_doc(evidence)
+
+        tasks.append(task)
+    return jsonify(tasks)
+
+@tasks_bp.route("/", methods=["POST"])
+def create_task():
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    if caller_role != "team_lead":
+        return jsonify({"success": False, "message": "Forbidden: Only Team Leads may create tasks"}), 403
+        
+    data = request.json
+    project_id = data.get("project_id")
+    
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found"}), 404
+        
+    # Team Lead must lead the project
+    if str(project.get("lead_id", "")) != caller_id:
+        return jsonify({"success": False, "message": "Forbidden: You do not lead this project"}), 403
+        
+    # Task assignment validation
+    assigned_to = data.get("assigned_to")
+    if assigned_to:
+        member_ids_str = [str(mid) for mid in project.get("member_ids", [])]
+        if str(assigned_to) not in member_ids_str:
+            return jsonify({"success": False, "message": "Validation Error: Assignee must be an intern member of the project"}), 400
+            
+        assigned_user = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
+        if not assigned_user or assigned_user.get("role", "").lower() != "intern":
+            return jsonify({"success": False, "message": "Validation Error: Assignee must have the role of Intern"}), 400
+            
+    task_doc = {
+        "project_id": project_id,
+        "title": data.get("title", ""),
+        "description": data.get("description", ""),
+        "assigned_to": assigned_to,
+        "assigned_by": caller_id,
+        "priority": data.get("priority", "Medium"),
+        "due_date": data.get("due_date", ""),
+        "status": "Pending",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+    
+    result = tasks_collection.insert_one(task_doc)
+    return jsonify({
+        "success": True,
+        "message": "Task created successfully",
+        "id": str(result.inserted_id)
+    }), 201
+
+@tasks_bp.route("/<task_id>", methods=["PATCH", "PUT"])
+def edit_task(task_id):
+    if not ObjectId.is_valid(task_id):
+        return jsonify({"success": False, "message": "Invalid task ID"}), 400
+        
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        return jsonify({"success": False, "message": "Task not found"}), 404
+        
+    project_id = task.get("project_id")
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found for this task"}), 404
+
+    if caller_role == "team_lead":
+        if str(project.get("lead_id", "")) != caller_id:
+            return jsonify({"success": False, "message": "Forbidden: You do not lead this project"}), 403
+    elif caller_role == "intern":
+        if str(task.get("assigned_to", "")) != caller_id:
+            return jsonify({"success": False, "message": "Forbidden: You cannot modify tasks assigned to others"}), 403
+        
+        data = request.json
+        allowed_keys = ["status"]
+        for k in data.keys():
+            if k not in allowed_keys:
+                return jsonify({"success": False, "message": "Forbidden: Interns may only update task status"}), 403
+    else:
+        return jsonify({"success": False, "message": "Forbidden: You are not authorized to edit this task"}), 403
+
+    data = request.json
+    if "_id" in data:
+        del data["_id"]
+        
+    current_status = task.get("status", "Pending")
+    new_status = data.get("status")
+    
+    if new_status and new_status != current_status:
+        if caller_role == "intern":
+            if current_status not in ["Pending", "In Progress"] or new_status not in ["Pending", "In Progress"]:
+                return jsonify({"success": False, "message": f"Forbidden transition from {current_status} to {new_status} for Intern"}), 400
+        elif caller_role == "team_lead":
+            if new_status in ["Approved", "Rejected"] and current_status not in ["Under Review", "Completed"]:
+                return jsonify({"success": False, "message": f"Cannot mark task as {new_status} unless it is Under Review or Completed (current: {current_status})"}), 400
+                
+    update_fields = {}
+    
+    if caller_role == "team_lead":
+        assigned_to = data.get("assigned_to")
+        if "assigned_to" in data and assigned_to:
+            member_ids_str = [str(mid) for mid in project.get("member_ids", [])]
+            if str(assigned_to) not in member_ids_str:
+                return jsonify({"success": False, "message": "Validation Error: Assignee must belong to the project"}), 400
+                
+            assigned_user = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
+            if not assigned_user or assigned_user.get("role", "").lower() != "intern":
+                return jsonify({"success": False, "message": "Validation Error: Assignee must be an Intern"}), 400
+                
+        for key in ["title", "description", "assigned_to", "priority", "due_date", "status"]:
+            if key in data:
+                update_fields[key] = data[key]
+    else:
+        if "status" in data:
+            update_fields["status"] = data["status"]
+            
+    update_fields["updated_at"] = datetime.utcnow().isoformat()
+    
+    result = tasks_collection.update_one(
+        {"_id": ObjectId(task_id)},
+        {"$set": update_fields}
+    )
+    
+    return jsonify({"success": True, "message": "Task updated"})
+
+@tasks_bp.route("/<task_id>", methods=["DELETE"])
+def delete_task(task_id):
+    if not ObjectId.is_valid(task_id):
+        return jsonify({"success": False, "message": "Invalid task ID"}), 400
+        
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        return jsonify({"success": False, "message": "Task not found"}), 404
+        
+    project_id = task.get("project_id")
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found for this task"}), 404
+
+    if caller_role != "team_lead" or str(project.get("lead_id", "")) != caller_id:
+        return jsonify({"success": False, "message": "Forbidden: Only the project's Team Lead may delete tasks"}), 403
+        
+    result = tasks_collection.delete_one({"_id": ObjectId(task_id)})
+    if result.deleted_count == 0:
+        return jsonify({"success": False, "message": "Task not found"}), 404
+        
+    task_evidence_collection.delete_many({"task_id": ObjectId(task_id)})
+    return jsonify({"success": True, "message": "Task deleted successfully"})
+
+@tasks_bp.route("/<task_id>/evidence", methods=["POST"])
+def upload_evidence(task_id):
+    if not ObjectId.is_valid(task_id):
+        return jsonify({"success": False, "message": "Invalid task ID"}), 400
+        
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_id = caller["id"]
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        return jsonify({"success": False, "message": "Task not found"}), 404
+        
+    # Evidence upload allowed only when task.assigned_to == current_user.id
+    if str(task.get("assigned_to", "")) != caller_id:
+        return jsonify({"success": False, "message": "Forbidden: You are not assigned to this task"}), 403
+        
+    notes = request.form.get("notes", "")
+    
+    file_path = ""
+    if request.files:
+        file = request.files.get("file")
+        if file:
+            os.makedirs("evidence", exist_ok=True)
+            ext = os.path.splitext(file.filename)[1]
+            filename = f"task_{task_id}_{int(datetime.utcnow().timestamp())}{ext}"
+            file_path_full = os.path.join("evidence", filename)
+            file.save(file_path_full)
+            file_path = f"evidence/{filename}"
+            
+    
+    evidence_doc = {
+        "project_id": task.get("project_id"),
+        "task_id": ObjectId(task_id),
+        "uploaded_by": caller_id,
+        "file_path": file_path,
+        "notes": notes,
+        "status": "pending",
+        "submitted_at": datetime.utcnow().isoformat(),
+        "reviewed_by": None,
+        "review_comments": ""
+    }
+    
+    result = task_evidence_collection.insert_one(evidence_doc)
+    
+    tasks_collection.update_one(
+        {"_id": ObjectId(task_id)},
+        {"$set": {
+            "status": "Under Review",
+            "updated_at": datetime.utcnow().isoformat()
+        }}
+    )
+    
+    return jsonify({
+        "success": True,
+        "message": "Task deliverable submitted, status set to Under Review",
+        "evidence_id": str(result.inserted_id)
+    }), 201
+
+@tasks_bp.route("/<task_id>/evidence/review", methods=["POST"])
+def review_evidence(task_id):
+    if not ObjectId.is_valid(task_id):
+        return jsonify({"success": False, "message": "Invalid task ID"}), 400
+        
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_id = caller["id"]
+    
+    task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        return jsonify({"success": False, "message": "Task not found"}), 404
+        
+    project_id = task.get("project_id")
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found for this task"}), 404
+        
+    # Evidence review allowed only when project.lead_id == current_user.id
+    if str(project.get("lead_id", "")) != caller_id:
+        return jsonify({"success": False, "message": "Forbidden: Only the project's Team Lead may review evidence"}), 403
+        
+    data = request.json
+    status = data.get("status")
+    review_comments = data.get("review_comments", "")
+    
+    if status not in ["approved", "rejected"]:
+        return jsonify({"success": False, "message": "Invalid review status"}), 400
+        
+    evidence_status = "approved" if status == "approved" else "rejected"
+    latest_evidence = task_evidence_collection.find_one(
+        {"task_id": ObjectId(task_id)},
+        sort=[("submitted_at", -1)]
+    )
+    if latest_evidence:
+        task_evidence_collection.update_one(
+            {"_id": latest_evidence["_id"]},
+            {"$set": {
+                "status": evidence_status,
+                "review_comments": review_comments,
+                "reviewed_by": caller_id,
+                "reviewed_at": datetime.utcnow().isoformat()
+            }}
+        )
+    
+    new_task_status = "Approved" if status == "approved" else "Rejected"
+    tasks_collection.update_one(
+        {"_id": ObjectId(task_id)},
+        {"$set": {
+            "status": new_task_status,
+            "updated_at": datetime.utcnow().isoformat()
+        }}
+    )
+    
+    return jsonify({
+        "success": True,
+        "message": f"Deliverable review completed. Task status set to {new_task_status}"
+    })
+
+@tasks_bp.route("/evidence/project/<project_id>", methods=["GET"])
+def get_project_evidence(project_id):
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    proj_query = {"_id": ObjectId(project_id) if ObjectId.is_valid(project_id) else project_id}
+    project = projects_collection.find_one(proj_query)
+    if not project:
+        return jsonify({"success": False, "message": "Project not found"}), 404
+        
+    member_ids_str = [str(mid) for mid in project.get("member_ids", [])]
+    if caller_role == "intern":
+        if caller_id not in member_ids_str:
+            return jsonify({"success": False, "message": "Forbidden: You are not a member of this project"}), 403
+            
+    if caller_role == "team_lead" and str(project.get("lead_id", "")) != caller_id:
+        return jsonify({"success": False, "message": "Forbidden: You do not lead this project"}), 403
+
+    query = {"project_id": project_id}
+    if ObjectId.is_valid(project_id):
+        query = {"$or": [{"project_id": project_id}, {"project_id": ObjectId(project_id)}]}
+        
+    evidence_list = []
+    for ev in task_evidence_collection.find(query).sort("submitted_at", -1):
+        ev = serialize_doc(ev)
+        
+        # Interns must not see other intern's evidence
+        uploaded_by_str = str(ev.get("uploaded_by", ""))
+        if caller_role == "intern" and uploaded_by_str != caller_id:
+            continue
+            
+        u_id = ev.get("uploaded_by")
+        if u_id:
+            u = users_collection.find_one({"_id": ObjectId(u_id) if ObjectId.is_valid(u_id) else u_id})
+            if u:
+                ev["user_name"] = u.get("name")
+                
+        t = tasks_collection.find_one({"_id": ObjectId(ev["task_id"])})
+        if t:
+            ev["task_title"] = t.get("title")
+            
+        evidence_list.append(ev)
+    return jsonify(evidence_list)
+
+@tasks_bp.route("/evidence", methods=["GET"])
+def get_all_evidence():
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    
+    query = {}
+    if caller_role == "intern":
+        query = {"uploaded_by": caller_id}
+    elif caller_role == "team_lead":
+        proj_lead_query = {"lead_id": caller_id}
+        if ObjectId.is_valid(caller_id):
+            proj_lead_query = {"$or": [{"lead_id": caller_id}, {"lead_id": ObjectId(caller_id)}]}
+        led_project_ids = [str(p["_id"]) for p in projects_collection.find(proj_lead_query)]
+        
+        query = {"project_id": {"$in": led_project_ids}}
+        proj_oids = [ObjectId(pid) for pid in led_project_ids if ObjectId.is_valid(pid)]
+        if proj_oids:
+            query = {"$or": [{"project_id": {"$in": led_project_ids}}, {"project_id": {"$in": proj_oids}}]}
+            
+    evidence_list = []
+    for ev in task_evidence_collection.find(query).sort("submitted_at", -1):
+        ev = serialize_doc(ev)
+        
+        u_id = ev.get("uploaded_by")
+        if u_id:
+            u = users_collection.find_one({"_id": ObjectId(u_id) if ObjectId.is_valid(u_id) else u_id})
+            if u:
+                ev["user_name"] = u.get("name")
+                
+        t = tasks_collection.find_one({"_id": ObjectId(ev["task_id"])})
+        if t:
+            ev["task_title"] = t.get("title")
+            
+        p_id = ev.get("project_id")
+        if p_id:
+            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
+            if p:
+                ev["project_name"] = p.get("name")
+                
+        evidence_list.append(ev)
+    return jsonify(evidence_list)

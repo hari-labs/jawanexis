@@ -27,17 +27,19 @@ export function InternManagement() {
   }, [])
 
 
-  const filtered = users.filter((i) => {
+  const interns = users.filter((u) => u.role.toLowerCase() === "intern")
+
+  const filtered = interns.filter((i) => {
     const matchesQuery =
-      i.name.toLowerCase().includes(query.toLowerCase()) || i.role.toLowerCase().includes(query.toLowerCase())
+      i.name.toLowerCase().includes(query.toLowerCase())
     const matchesFilter = filter === "all" || i.status === filter
     return matchesQuery && matchesFilter
   })
 
   return (
     <div>
-      <PageHeader title="Intern Management" description={`${users.length} interns in your program`}>
-        <Link to="/admin/interns/invite">
+      <PageHeader title="Intern Management" description={`${interns.length} interns in your program`}>
+        <Link to="/admin/invitations">
           <Button>
             <UserPlus className="h-4 w-4" />
             Invite intern
