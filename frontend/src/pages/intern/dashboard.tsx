@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -45,9 +45,21 @@ export function InternDashboard() {
   const [actionLoading, setActionLoading] = useState(false)
   const [agentOfflineWarning, setAgentOfflineWarning] = useState(false)
 
+  const isPollingRef = useRef(false)
+  const activeControllerRef = useRef<AbortController | null>(null)
+
   const pollDashboardData = async (uid: string) => {
+    if (isPollingRef.current) return
+    isPollingRef.current = true
+    
+    if (activeControllerRef.current) {
+      activeControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    activeControllerRef.current = controller
+    
     try {
-      const data = await getDashboardData(uid, "intern")
+      const data = await getDashboardData(uid, "intern", { signal: controller.signal })
       
       if (data.summary) {
         setMe(data.summary)
@@ -76,8 +88,12 @@ export function InternDashboard() {
       if (data.recent_activity) {
         setRecentActivity(data.recent_activity)
       }
-    } catch (err) {
-      console.error("Error polling dashboard data:", err)
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.error("Error polling dashboard data:", err)
+      }
+    } finally {
+      isPollingRef.current = false
     }
   }
 
@@ -107,6 +123,9 @@ export function InternDashboard() {
         return () => {
           active = false
           if (timerId) clearTimeout(timerId)
+          if (activeControllerRef.current) {
+            activeControllerRef.current.abort()
+          }
         }
       } catch (e) {
         console.error(e)
@@ -142,14 +161,14 @@ export function InternDashboard() {
         if (command === "START" && !agentOnline) {
           setAgentOfflineWarning(true)
         }
-        loadMonitoringStatus(userId)
+        pollDashboardData(userId)
       } else {
         alert(res.message || "Failed to issue command")
-        loadMonitoringStatus(userId)
+        pollDashboardData(userId)
       }
     } catch (e) {
       alert("Error sending command to backend")
-      loadMonitoringStatus(userId)
+      pollDashboardData(userId)
     } finally {
       setActionLoading(false)
     }
@@ -349,10 +368,10 @@ export function InternDashboard() {
       </Card>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Productivity" value={`${me.productivityToday !== undefined ? me.productivityToday : (me.productivity || 0)}%`} delta="+4%" trend="up" icon={Zap} />
-        <StatCard label="Work hours today" value={fmt(me.today_work_mins !== undefined ? me.today_work_mins : (me.total_work_mins || 0))} delta="+0.5h" trend="up" icon={Clock} />
-        <StatCard label="Break time" value={fmt(me.today_idle_mins !== undefined ? me.today_idle_mins : (me.total_idle_mins || 0))} delta="-0.2h" trend="down" icon={Coffee} />
-        <StatCard label="Tasks done" value={`${me.completedTasksCount || 0}`} delta="+1" trend="up" icon={Target} />
+        <StatCard label="Productivity" value={`${me.productivityToday !== undefined ? me.productivityToday : (me.productivity || 0)}%`} icon={Zap} />
+        <StatCard label="Work hours today" value={fmt(me.today_work_mins !== undefined ? me.today_work_mins : (me.total_work_mins || 0))} icon={Clock} />
+        <StatCard label="Break time" value={fmt(me.today_idle_mins !== undefined ? me.today_idle_mins : (me.total_idle_mins || 0))} icon={Coffee} />
+        <StatCard label="Tasks done" value={`${me.completedTasksCount || 0}`} icon={Target} />
       </div>
 
       <Card>
@@ -433,11 +452,45 @@ export function InternDashboard() {
           <CardHeader>
             <CardTitle>Today&apos;s score</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col items-center gap-3 pb-8">
+          <CardContent className="flex flex-col items-center gap-3 pb-8 w-full max-w-[280px]">
             <ProductivityRing value={me.productivityToday !== undefined ? me.productivityToday : (me.productivity || 0)} size={150} />
             <p className="text-center text-sm text-muted-foreground text-pretty">
-              You&apos;re in the top 15% of interns this week. Keep it up.
+              {(me.productivityToday !== undefined ? me.productivityToday : (me.productivity || 0)) >= 80
+                ? "Excellent focus! You're performing highly productively today."
+                : (me.productivityToday !== undefined ? me.productivityToday : (me.productivity || 0)) >= 50
+                ? "Good progress. Keep staying focused on productive tasks."
+                : "Stay focused. Try to minimize usage of distracting sites."}
             </p>
+            <div className="w-full mt-4 border-t border-border pt-4 text-xs space-y-2">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Productive Time:</span>
+                <span className="font-semibold text-foreground">{me.today_productive_mins || 0}m</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Neutral Time:</span>
+                <span className="font-semibold text-foreground">{me.today_neutral_mins || 0}m</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Unproductive Time:</span>
+                <span className="font-semibold text-foreground text-destructive">{me.today_unproductive_mins || 0}m</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Idle Time:</span>
+                <span className="font-semibold text-foreground">{me.today_idle_mins || 0}m</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Locked Time:</span>
+                <span className="font-semibold text-foreground">{me.today_locked_mins || 0}m</span>
+              </div>
+              <div className="flex justify-between border-t border-border/40 pt-2">
+                <span className="text-muted-foreground">Efficiency Ratio:</span>
+                <span className="font-semibold text-foreground">{me.today_efficiency || 0}%</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Activity Ratio:</span>
+                <span className="font-semibold text-foreground">{me.today_activity_ratio || 0}%</span>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

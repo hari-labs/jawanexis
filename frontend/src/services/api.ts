@@ -1,6 +1,6 @@
 export type Status = "active" | "paused" | "offline"
 
-const BASE_URL = "http://10.154.171.147:5000"
+const BASE_URL = "http://127.0.0.1:5000"
 
 function getUserId() {
     const storedUserStr = localStorage.getItem("user")
@@ -78,15 +78,15 @@ export function categoryColor(category: string) {
   }
 }
 
-export async function getAppUsage(employeeId?: string) {
+export async function getAppUsage(employeeId?: string, options?: RequestInit) {
     const url = employeeId ? `${BASE_URL}/reports/app-usage?employee_id=${employeeId}` : `${BASE_URL}/reports/app-usage`
-    const response = await authFetch(url)
+    const response = await authFetch(url, options)
     return await response.json()
 }
 
-export async function getSiteUsage(employeeId?: string) {
+export async function getSiteUsage(employeeId?: string, options?: RequestInit) {
     const url = employeeId ? `${BASE_URL}/reports/site-usage?employee_id=${employeeId}` : `${BASE_URL}/reports/site-usage`
-    const response = await authFetch(url)
+    const response = await authFetch(url, options)
     return await response.json()
 }
 
@@ -106,11 +106,16 @@ export async function getWorkTimeTrend(days = 7, employeeId?: string) {
     return await response.json()
 }
 
-export async function getInternSummary(id: string, sessionId?: string) {
+export async function getPublicStats() {
+    const response = await fetch(`${BASE_URL}/reports/public-stats`)
+    return await response.json()
+}
+
+export async function getInternSummary(id: string, sessionId?: string, options?: RequestInit) {
     const url = sessionId && sessionId !== "all"
         ? `${BASE_URL}/reports/intern-summary/${id}?session_id=${sessionId}`
         : `${BASE_URL}/reports/intern-summary/${id}`
-    const response = await authFetch(url)
+    const response = await authFetch(url, options)
     return await response.json()
 }
 
@@ -353,8 +358,9 @@ export async function getTeamOverview() {
     return await response.json()
 }
 
-export async function getAllEvidence() {
-    const response = await authFetch(`${BASE_URL}/tasks/evidence`)
+export async function getAllEvidence(userId?: string) {
+    const url = userId ? `${BASE_URL}/tasks/evidence?user_id=${userId}` : `${BASE_URL}/tasks/evidence`
+    const response = await authFetch(url)
     return await response.json()
 }
 
@@ -424,7 +430,7 @@ export async function getTeamLeadAnalytics(leadId: string) {
     return await response.json()
 }
 
-export async function getDashboardData(userId: string, role: string) {
-    const response = await authFetch(`${BASE_URL}/reports/dashboard-data?user_id=${userId}&role=${role}`)
+export async function getDashboardData(userId: string, role: string, options?: RequestInit) {
+    const response = await authFetch(`${BASE_URL}/reports/dashboard-data?user_id=${userId}&role=${role}`, options)
     return await response.json()
 }

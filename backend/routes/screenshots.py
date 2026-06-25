@@ -191,6 +191,19 @@ def create_screenshot():
         result = screenshots_collection.insert_one(data)
         inserted_id = result.inserted_id
 
+    # Trigger screenshot notification
+    if inserted_id and data.get("user_id"):
+        try:
+            from routes.notifications import create_notification_internal
+            create_notification_internal(
+                data["user_id"],
+                "Screenshot Uploaded",
+                "A desktop screenshot has been successfully captured and uploaded to the cloud.",
+                "screenshot_uploaded"
+            )
+        except Exception as e:
+            print("Failed to trigger screenshot notification:", e)
+
     # Automatic Local Cleanup
     if uploaded_to_cloud and inserted_id and local_fp:
         try:

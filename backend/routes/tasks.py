@@ -187,6 +187,17 @@ def create_task():
     }
     
     result = tasks_collection.insert_one(task_doc)
+    try:
+        from routes.notifications import create_notification_internal
+        create_notification_internal(
+            assigned_to,
+            "Task Assigned",
+            f"You have been assigned a new task: {task_doc['title']}",
+            "task_assigned"
+        )
+    except Exception as e:
+        print("Failed to trigger task assignment notification:", e)
+        
     return jsonify({
         "success": True,
         "message": "Task created successfully",
@@ -272,6 +283,23 @@ def edit_task(task_id):
         {"$set": update_fields}
     )
     
+    if "status" in update_fields:
+        try:
+            from routes.notifications import create_notification_internal
+            task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+            if task:
+                assigned_to = task.get("assigned_to")
+                title = task.get("title", "")
+                status_val = update_fields["status"]
+                create_notification_internal(
+                    assigned_to,
+                    f"Task Status Updated",
+                    f"Your task '{title}' has been set to '{status_val}'",
+                    "task_updated"
+                )
+        except Exception as e:
+            print("Failed to trigger task update notification:", e)
+            
     return jsonify({"success": True, "message": "Task updated"})
 
 @tasks_bp.route("/<task_id>", methods=["DELETE"])
@@ -361,6 +389,27 @@ def upload_evidence(task_id):
         }}
     )
     
+    try:
+        from routes.notifications import create_notification_internal
+        # Notify the intern deliverable is Under Review
+        create_notification_internal(
+            caller_id,
+            "Task Deliverable Submitted",
+            f"Your deliverable for '{task.get('title')}' has been submitted and is Under Review.",
+            "task_under_review"
+        )
+        # Notify project lead that review is needed
+        lead_id = task.get("assigned_by")
+        if lead_id and lead_id != caller_id:
+            create_notification_internal(
+                lead_id,
+                "Review Required",
+                f"A new deliverable for task '{task.get('title')}' is awaiting your review.",
+                "task_review_needed"
+            )
+    except Exception as e:
+        print("Failed to trigger task submission notifications:", e)
+
     return jsonify({
         "success": True,
         "message": "Task deliverable submitted, status set to Under Review",
@@ -424,6 +473,27 @@ def review_evidence(task_id):
         }}
     )
     
+    try:
+        from routes.notifications import create_notification_internal
+        assigned_to = task.get("assigned_to")
+        title = task.get("title", "")
+        if new_task_status == "Approved":
+            create_notification_internal(
+                assigned_to,
+                "Task Completed",
+                f"Congratulations! Your deliverable for task '{title}' has been approved.",
+                "task_completed"
+            )
+        else:
+            create_notification_internal(
+                assigned_to,
+                "Task Deliverable Rejected",
+                f"Your deliverable for task '{title}' was rejected. Reason: {review_comments}",
+                "task_rejected"
+            )
+    except Exception as e:
+        print("Failed to trigger task review notification:", e)
+
     return jsonify({
         "success": True,
         "message": f"Deliverable review completed. Task status set to {new_task_status}"
@@ -477,6 +547,56 @@ def get_project_evidence(project_id):
         evidence_list.append(ev)
     return jsonify(evidence_list)
 
+@tasks_bp.route("/user/<user_id>", methods=["GET"])
+def get_user_tasks(user_id):
+    caller = get_caller_user()
+    if not caller:
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    
+    caller_role = caller.get("role", "intern")
+    caller_id = caller["id"]
+    if caller_role == "intern" and caller_id != user_id:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+        
+    query = {"assigned_to": user_id}
+    if ObjectId.is_valid(user_id):
+        query = {"$or": [{"assigned_to": user_id}, {"assigned_to": ObjectId(user_id)}]}
+        
+    tasks = []
+    for task in tasks_collection.find(query):
+        task = serialize_doc(task)
+        
+        assigned_to = task.get("assigned_to")
+        if assigned_to:
+            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
+            if u:
+                task["assigned_to_name"] = u.get("name")
+                
+        assigned_by = task.get("assigned_by")
+        if assigned_by:
+            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
+            if u:
+                task["assigned_by_name"] = u.get("name")
+                
+        p_id = task.get("project_id")
+        if p_id:
+            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
+            if p:
+                task["project_name"] = p.get("name")
+                
+        evidence = task_evidence_collection.find_one(
+            {
+                "task_id": ObjectId(task["_id"]) if ObjectId.is_valid(task["_id"]) else task["_id"],
+                "uploaded_by": {"$in": [user_id, ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id]}
+            },
+            sort=[("submitted_at", -1)]
+        )
+        if evidence:
+            task["evidence"] = serialize_doc(evidence)
+            
+        tasks.append(task)
+    return jsonify(tasks)
+
 @tasks_bp.route("/evidence", methods=["GET"])
 def get_all_evidence():
     caller = get_caller_user()
@@ -486,19 +606,50 @@ def get_all_evidence():
     caller_role = caller.get("role", "intern")
     caller_id = caller["id"]
     
+    target_user_id = request.args.get("user_id") or request.args.get("employee_id")
+    has_user_filter = ("user_id" in request.args) or ("employee_id" in request.args)
+    if has_user_filter and not target_user_id:
+        target_user_id = "non_existent_id"
+
     query = {}
     if caller_role == "intern":
         query = {"uploaded_by": caller_id}
-    elif caller_role == "team_lead":
+    elif caller_role in ["team_lead", "team lead"]:
         proj_lead_query = {"lead_id": caller_id}
         if ObjectId.is_valid(caller_id):
             proj_lead_query = {"$or": [{"lead_id": caller_id}, {"lead_id": ObjectId(caller_id)}]}
         led_project_ids = [str(p["_id"]) for p in projects_collection.find(proj_lead_query)]
-        
-        query = {"project_id": {"$in": led_project_ids}}
         proj_oids = [ObjectId(pid) for pid in led_project_ids if ObjectId.is_valid(pid)]
-        if proj_oids:
-            query = {"$or": [{"project_id": {"$in": led_project_ids}}, {"project_id": {"$in": proj_oids}}]}
+        
+        if has_user_filter:
+            if not target_user_id or target_user_id == "non_existent_id":
+                return jsonify([])
+            allowed_members = set()
+            for p in projects_collection.find(proj_lead_query):
+                for mid in p.get("member_ids", []):
+                    allowed_members.add(str(mid))
+            if target_user_id in allowed_members:
+                query = {"uploaded_by": target_user_id}
+            else:
+                return jsonify([])
+        else:
+            query = {"project_id": {"$in": led_project_ids}}
+            if proj_oids:
+                query = {"$or": [{"project_id": {"$in": led_project_ids}}, {"project_id": {"$in": proj_oids}}]}
+    else: # admin
+        if has_user_filter or target_user_id:
+            query = {"uploaded_by": target_user_id or "non_existent_id"}
+            
+    if "uploaded_by" in query:
+        uid = query["uploaded_by"]
+        if ObjectId.is_valid(uid):
+            query = {"$or": [{"uploaded_by": uid}, {"uploaded_by": ObjectId(uid)}]}
+        else:
+            try:
+                legacy_int = int(uid)
+                query = {"$or": [{"uploaded_by": uid}, {"uploaded_by": legacy_int}]}
+            except (ValueError, TypeError):
+                pass
             
     evidence_list = []
     for ev in task_evidence_collection.find(query).sort("submitted_at", -1):

@@ -80,7 +80,12 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
   const isIntern = user.role.toLowerCase() === "intern"
 
   // Intern calculations
-  const internTasks = tasks.filter(t => t.assigned_to === user.id)
+  const internTasks = user.id ? tasks.filter(t => t.assigned_to === user.id) : []
+  const internEvidence = user.id ? evidence.filter(ev => 
+    ev.uploaded_by === user.id || 
+    ev.user_id === user.id ||
+    ev.employee_id === user.id
+  ) : []
   const totalTasks = internTasks.length
   const completedTasks = internTasks.filter(t => t.status === "Completed" || t.status === "Approved").length
   const rejectedTasks = internTasks.filter(t => t.status === "Rejected").length
@@ -452,6 +457,7 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                   className="bg-background border border-border rounded px-3 py-1.5 text-xs font-semibold text-foreground focus:outline-none min-w-[200px]"
                 >
                   <option value="all">All Sessions (Overall Recent)</option>
+                  <option value="today">Today&apos;s Summary</option>
                   {sessions.map((sess: any) => (
                     <option key={sess.id} value={sess.id}>
                       {new Date(sess.start_time).toLocaleString()} ({sess.status})
@@ -600,7 +606,14 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
               <div className="grid gap-6 md:grid-cols-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Today&apos;s Applications ({localSummary.app_count})</CardTitle>
+                    <CardTitle>
+                      {selectedSessionId === "all"
+                        ? "Applications Used (All Time)"
+                        : selectedSessionId === "today"
+                        ? "Today's Applications"
+                        : "Session Applications"}{" "}
+                      ({localSummary.app_count})
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3.5 max-h-[300px] overflow-y-auto">
                     {appUsage.map((a: any, idx: number) => (
@@ -615,14 +628,29 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                       </div>
                     ))}
                     {appUsage.length === 0 && (
-                      <p className="text-xs text-muted-foreground italic text-center py-6">No application events recorded today.</p>
+                      <p className="text-xs text-muted-foreground italic text-center py-6">
+                        No application usage recorded{" "}
+                        {selectedSessionId === "all"
+                          ? "across all sessions"
+                          : selectedSessionId === "today"
+                          ? "today"
+                          : "during this session"}
+                        .
+                      </p>
                     )}
                   </CardContent>
                 </Card>
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Today&apos;s Websites ({localSummary.site_count})</CardTitle>
+                    <CardTitle>
+                      {selectedSessionId === "all"
+                        ? "Websites Visited (All Time)"
+                        : selectedSessionId === "today"
+                        ? "Today's Websites"
+                        : "Session Websites"}{" "}
+                      ({localSummary.site_count})
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3.5 max-h-[300px] overflow-y-auto">
                     {siteUsage.map((s: any, idx: number) => (
@@ -637,7 +665,15 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                       </div>
                     ))}
                     {siteUsage.length === 0 && (
-                      <p className="text-xs text-muted-foreground italic text-center py-6">No website visits recorded today.</p>
+                      <p className="text-xs text-muted-foreground italic text-center py-6">
+                        No website visits recorded{" "}
+                        {selectedSessionId === "all"
+                          ? "across all sessions"
+                          : selectedSessionId === "today"
+                          ? "today"
+                          : "during this session"}
+                        .
+                      </p>
                     )}
                   </CardContent>
                 </Card>
@@ -687,11 +723,11 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
               {isIntern && (
                 <Card>
                   <CardHeader>
-                    <CardTitle>Evidence History ({evidence.length})</CardTitle>
+                    <CardTitle>Evidence History ({internEvidence.length})</CardTitle>
                   </CardHeader>
                   <CardContent className="max-h-[300px] overflow-y-auto pr-1">
                     <div className="space-y-4">
-                      {evidence.map((ev) => (
+                      {internEvidence.map((ev) => (
                         <div key={ev._id} className="border border-border p-3.5 rounded-lg flex flex-col gap-2 bg-secondary/5">
                           <div className="flex items-center justify-between">
                             <p className="font-bold text-sm text-foreground">Task: {ev.task_title || "Task Deliverable"}</p>
@@ -715,7 +751,7 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                           </div>
                         </div>
                       ))}
-                      {evidence.length === 0 && (
+                      {internEvidence.length === 0 && (
                         <p className="text-xs text-muted-foreground italic text-center py-6">No evidence deliverables submitted.</p>
                       )}
                     </div>
@@ -831,7 +867,7 @@ export function UsersList() {
         getInternSummary(user.id),
         getAssignedProjects(user.id),
         getAllTasks(),
-        getAllEvidence(),
+        getAllEvidence(user.id),
         getUsers(),
         getAllMonitoringStatus().catch(() => [])
       ])

@@ -3,6 +3,7 @@ from collections import defaultdict
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 import os
+import time
 
 from utils.serializer import serialize_doc
 from database.mongodb import (
@@ -21,7 +22,11 @@ from config.productivity_rules import (
     PRODUCTIVE_APPS,
     DISTRACTING_APPS,
     PRODUCTIVE_SITES,
-    DISTRACTING_SITES
+    DISTRACTING_SITES,
+    classify_app,
+    classify_website,
+    calculate_productivity_score,
+    is_browser
 )
 
 reports_bp = Blueprint(
@@ -71,13 +76,15 @@ def _resolve_allowed_uids(caller_id, employee_id=None):
                 {"lead_id": ObjectId(caller_uid) if ObjectId.is_valid(caller_uid) else caller_uid}
             ]
         }))
-        allowed = {caller_uid}
+        allowed = set()
         for p in projects:
             for mid in p.get("member_ids", []):
-                allowed.add(str(mid))
+                mid_str = str(mid)
+                if mid_str != caller_uid:
+                    allowed.add(mid_str)
         allowed_list = list(allowed)
         if employee_id:
-            if employee_id in allowed_list:
+            if employee_id in allowed_list or employee_id == caller_uid:
                 return [employee_id]
             else:
                 return []
@@ -87,12 +94,18 @@ def _resolve_allowed_uids(caller_id, employee_id=None):
             return [employee_id]
         return None
 
+_RESOLVED_USER_IDS_CACHE = {}
+
 def _resolve_user_ids(mongo_user_id: str):
     """
     Given a MongoDB user _id string, return the full set of IDs that
     might appear as 'user_id' in sessions/screenshots/applications.
     Covers: ObjectId, str(ObjectId), legacy int user_id.
     """
+    mongo_user_id = str(mongo_user_id)
+    if mongo_user_id in _RESOLVED_USER_IDS_CACHE:
+        return _RESOLVED_USER_IDS_CACHE[mongo_user_id]
+
     ids = set()
     ids.add(mongo_user_id)
     try:
@@ -106,7 +119,9 @@ def _resolve_user_ids(mongo_user_id: str):
         if legacy is not None:
             ids.add(legacy)
             ids.add(str(legacy))
-    return list(ids)
+    res = list(ids)
+    _RESOLVED_USER_IDS_CACHE[mongo_user_id] = res
+    return res
 
 def _get_user_sessions(mongo_user_id: str):
     """Return all sessions for a user, newest first."""
@@ -134,60 +149,14 @@ def _utc_to_local_ist(utc_str):
     except Exception:
         return None
 
-def _resolve_session_active_idle(s):
-    """
-    Return a tuple (active_minutes, idle_minutes) for a session.
-    Calculates precise values based on actual application usage telemetry and session duration.
-    """
-    start_str = s.get("start_time")
-    if not start_str:
-        return 0, 0
-        
-    try:
-        if start_str.endswith("Z"):
-            start_str = start_str[:-1] + "+00:00"
-        start_dt = datetime.fromisoformat(start_str)
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return 0, 0
-
-    end_str = s.get("end_time")
-    if end_str:
-        try:
-            if end_str.endswith("Z"):
-                end_str = end_str[:-1] + "+00:00"
-            end_dt = datetime.fromisoformat(end_str)
-            if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=timezone.utc)
-            total_seconds = max(0, int((end_dt - start_dt).total_seconds()))
-        except Exception:
-            total_seconds = 0
-    else:
-        uid = str(s.get("user_id"))
-        state_doc = monitoring_states_collection.find_one({"user_id": uid})
-        if state_doc and (str(state_doc.get("current_session_id")) == str(s["_id"]) or state_doc.get("current_state") == "RUNNING"):
-            from routes.monitoring import calculate_elapsed_seconds
-            total_seconds = calculate_elapsed_seconds(state_doc)
-        else:
-            total_seconds = 0
-
-    app_usages = list(applications_collection.find({"session_id": {"$in": [s["_id"], str(s["_id"])]}}))
-    total_app_seconds = sum(app.get("duration_seconds") or app.get("duration") or 0 for app in app_usages)
-
-    active_seconds = min(total_seconds, total_app_seconds)
-    idle_seconds = max(0, total_seconds - active_seconds)
-
-    if active_seconds == 0 and idle_seconds == 0 and total_seconds > 0:
-        active_seconds = total_seconds
-
-    active_mins = round(active_seconds / 60, 2)
-    idle_mins = round(idle_seconds / 60, 2)
-    
-    return active_mins, idle_mins
+_SESSION_TELEMETRY_CACHE = {}
 
 
-def _resolve_session_for_telemetry(doc, time_field="start_time"):
+
+
+
+
+def _resolve_session_for_telemetry(doc, time_field="start_time", sessions_cache=None):
     """
     Resolve the session for an application/website/screenshot document.
     Tries ObjectId lookup first, then integer session_id → session map,
@@ -195,6 +164,38 @@ def _resolve_session_for_telemetry(doc, time_field="start_time"):
     """
     raw_sid = doc.get("session_id")
     if raw_sid is None:
+        return None
+
+    # Load from request cache if possible
+    from flask import has_request_context, g
+    if sessions_cache is None and has_request_context():
+        uid = doc.get("user_id")
+        if uid:
+            uid_str = str(uid)
+            if not hasattr(g, "sessions_cache_by_user"):
+                g.sessions_cache_by_user = {}
+            if uid_str in g.sessions_cache_by_user:
+                sessions_cache = g.sessions_cache_by_user[uid_str]
+            else:
+                sessions_list = _get_user_sessions(uid_str)
+                sessions_cache = {str(s["_id"]): s for s in sessions_list}
+                sessions_cache["all_sessions"] = sessions_list
+                g.sessions_cache_by_user[uid_str] = sessions_cache
+
+    if sessions_cache is not None:
+        sid_str = str(raw_sid)
+        if sid_str in sessions_cache:
+            return sessions_cache[sid_str]
+        # Overlap fallback in cache
+        event_time = doc.get(time_field)
+        if event_time:
+            all_sess = sessions_cache.get("all_sessions", [])
+            for sess in all_sess:
+                start_time = sess.get("start_time", "")
+                if start_time and start_time <= event_time:
+                    end_time = sess.get("end_time")
+                    if not end_time or event_time <= end_time:
+                        return sess
         return None
 
     # 1. Direct ObjectId lookup
@@ -207,49 +208,279 @@ def _resolve_session_for_telemetry(doc, time_field="start_time"):
             pass
 
     # 2. Integer session_id — look up the synced session mapping
-    # Sessions created by the sync_service may store an int session_id
-    # that maps to a MongoDB _id via user_id on the session doc
-    # (This is the legacy path — sync_service now stores ObjectId strings)
-    # We try time-range fallback:
     event_time = doc.get(time_field)
     if not event_time:
         return None
 
+    # Filter sessions strictly by the event's user to avoid cross-user telemetry leakage
+    uid = doc.get("user_id")
+    if not uid:
+        return None
+    resolved_ids = _resolve_user_ids(uid)
+
     # Find sessions whose time range overlaps with event_time
     candidates = list(
-        sessions_collection.find({"start_time": {"$lte": event_time}}).sort("start_time", -1).limit(20)
+        sessions_collection.find({
+            "user_id": {"$in": resolved_ids},
+            "start_time": {"$lte": event_time}
+        }).sort("start_time", -1).limit(20)
     )
     for sess in candidates:
         end_time = sess.get("end_time")
         if not end_time or event_time <= end_time:
             return sess
-    return candidates[0] if candidates else None
+    return None
+
+def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE"):
+    """
+    Consolidated shared aggregation helper using central productivity engine.
+    """
+    from config.productivity_rules import calculate_productivity, _resolve_user_ids, _utc_to_local_ist, classify_app, classify_website
+    
+    # 1. Resolve user IDs based on visibility_scope
+    target_user_ids = []
+    if visibility_scope == "TEAM_SCOPE":
+        lead_oids = [user_id]
+        if ObjectId.is_valid(user_id):
+            lead_oids.append(ObjectId(user_id))
+        led_projects = list(projects_collection.find({"lead_id": {"$in": lead_oids}}))
+        team_member_ids = {str(user_id)}
+        for p in led_projects:
+            for mid in p.get("member_ids", []):
+                team_member_ids.add(str(mid))
+        target_user_ids = list(team_member_ids)
+    elif visibility_scope == "ADMIN_SCOPE":
+        all_users = list(users_collection.find({}, {"_id": 1}))
+        target_user_ids = [str(u["_id"]) for u in all_users]
+    else: # INTERN_SCOPE
+        target_user_ids = [user_id]
+
+    resolved_ids = []
+    for uid in target_user_ids:
+        resolved_ids.extend(_resolve_user_ids(uid))
+
+    if not resolved_ids:
+        return {
+            "tracked_mins": 0.0,
+            "active_mins": 0.0,
+            "idle_mins": 0.0,
+            "locked_mins": 0.0,
+            "productive_mins": 0.0,
+            "neutral_mins": 0.0,
+            "unproductive_mins": 0.0,
+            "efficiency_ratio": 0.0,
+            "activity_ratio": 0.0,
+            "productivity": 0,
+            "apps": [],
+            "sites": [],
+            "screenshots": [],
+            "screenshot_count": 0
+        }
+
+    # Query screenshots (for single user or multiple users, based on scope)
+    today_local_dt = datetime.utcnow() + timedelta(minutes=330)
+    today_prefix = today_local_dt.strftime("%Y-%m-%d")
+
+    # Normalize scope names
+    normalized_scope = scope
+    if scope == "TODAY_SCOPE":
+        normalized_scope = "TODAY"
+    elif scope == "ALL_TIME_SCOPE":
+        normalized_scope = "ALL_TIME"
+    elif scope == "SESSION_SCOPE":
+        normalized_scope = "SESSION"
+    elif scope == "WEEK_SCOPE":
+        normalized_scope = "WEEK"
+    scope = normalized_scope
+
+    # Screenshot query
+    if normalized_scope == "SESSION" and session_id:
+        session_ids_to_query = [session_id]
+        if ObjectId.is_valid(str(session_id)):
+            session_ids_to_query.append(ObjectId(str(session_id)))
+        try:
+            session_ids_to_query.append(int(str(session_id)))
+        except (ValueError, TypeError):
+            pass
+        shot_query = {"session_id": {"$in": session_ids_to_query}}
+    else:
+        shot_query = {"user_id": {"$in": resolved_ids}}
+
+    if normalized_scope == "TODAY":
+        ist_start = datetime(today_local_dt.year, today_local_dt.month, today_local_dt.day, 0, 0, 0)
+        utc_start = ist_start - timedelta(minutes=330)
+        oldest_possible_utc = (utc_start - timedelta(days=1)).isoformat()
+        shot_query["captured_at"] = {"$gte": oldest_possible_utc}
+    elif normalized_scope == "WEEK":
+        oldest_possible_utc = (today_local_dt - timedelta(days=8)).isoformat()
+        shot_query["captured_at"] = {"$gte": oldest_possible_utc}
+
+    shots = list(screenshots_collection.find(
+        shot_query,
+        {"session_id": 1, "captured_at": 1, "file_path": 1, "app_name": 1, "app": 1, "window_title": 1, "uploaded_to_cloud": 1, "cloudinary_url": 1, "user_id": 1}
+    ).sort("captured_at", -1))
+
+    all_sessions = list(sessions_collection.find({"user_id": {"$in": resolved_ids}}).sort("start_time", -1))
+    sessions_cache = {str(s["_id"]): s for s in all_sessions}
+    sessions_cache["all_sessions"] = all_sessions
+
+    filtered_shots = []
+    for shot in shots:
+        if normalized_scope == "TODAY":
+            local_dt = _utc_to_local_ist(shot.get("captured_at"))
+            if not local_dt or local_dt.strftime("%Y-%m-%d") != today_prefix:
+                continue
+        elif normalized_scope == "WEEK":
+            local_dt = _utc_to_local_ist(shot.get("captured_at"))
+            if not local_dt:
+                continue
+            date_diff = (today_local_dt - local_dt).days
+            if date_diff < 0 or date_diff >= 7:
+                continue
+        elif normalized_scope == "SESSION" and session_id:
+            sess = _resolve_session_for_telemetry(shot, time_field="captured_at", sessions_cache=sessions_cache)
+            if not sess or str(sess["_id"]) != str(session_id):
+                continue
+        filtered_shots.append(shot)
+
+    screenshots_list = []
+    for shot in filtered_shots:
+        fmt_shot = _format_screenshot(shot)
+        if fmt_shot:
+            screenshots_list.append(fmt_shot)
+
+    # 2. Call the Central Productivity Engine
+    # If single user, delegate directly to avoid duplicate logic
+    if visibility_scope == "INTERN_SCOPE" and len(target_user_ids) == 1:
+        uid = target_user_ids[0]
+        # Pass session_id if scope is SESSION
+        engine_scope = session_id if normalized_scope == "SESSION" else normalized_scope
+        res = calculate_productivity(uid, engine_scope)
+        
+        apps_list = []
+        for app in res["productive_apps"] + res["neutral_apps"] + res["unproductive_apps"]:
+            apps_list.append({
+                "name": app["name"],
+                "duration": app["duration"],
+                "percentage": app["percentage"],
+                "category": "distracting" if app["category"] == "unproductive" else app["category"]
+            })
+        sites_list = []
+        for site in res["productive_sites"] + res["neutral_sites"] + res["unproductive_sites"]:
+            sites_list.append({
+                "domain": site["domain"],
+                "duration": site["duration"],
+                "percentage": site["percentage"],
+                "category": "distracting" if site["category"] == "unproductive" else site["category"]
+            })
+
+        return {
+            "tracked_mins": round(res["tracked_minutes"], 1),
+            "active_mins": round(res["active_minutes"], 1),
+            "idle_mins": round(res["idle_minutes"], 1),
+            "locked_mins": round(res["locked_minutes"], 1),
+            "productive_mins": round(res["productive_minutes"], 1),
+            "neutral_mins": round(res["neutral_minutes"], 1),
+            "unproductive_mins": round(res["unproductive_minutes"], 1),
+            "efficiency_ratio": res["efficiency_ratio"],
+            "activity_ratio": res["activity_ratio"],
+            "productivity": res["productivity"],
+            "apps": apps_list,
+            "sites": sites_list,
+            "screenshots": screenshots_list,
+            "screenshot_count": len(screenshots_list)
+        }
+
+    # Multiple users: average percentages/ratios and sum minutes
+    user_scores = []
+    user_efficiencies = []
+    user_activities = []
+    
+    total_prod_mins = 0.0
+    total_neutral_mins = 0.0
+    total_unprod_mins = 0.0
+    total_idle_mins = 0.0
+    total_locked_mins = 0.0
+    total_tracked_mins = 0.0
+    total_active_mins = 0.0
+    
+    app_durations = defaultdict(int)
+    site_durations = defaultdict(int)
+    
+    for uid in target_user_ids:
+        engine_scope = session_id if normalized_scope == "SESSION" else normalized_scope
+        user_res = calculate_productivity(uid, engine_scope)
+        if user_res["tracked_minutes"] > 0:
+            user_scores.append(user_res["productivity"])
+            user_efficiencies.append(user_res["efficiency_ratio"])
+            user_activities.append(user_res["activity_ratio"])
+            
+            total_prod_mins += user_res["productive_minutes"]
+            total_neutral_mins += user_res["neutral_minutes"]
+            total_unprod_mins += user_res["unproductive_minutes"]
+            total_idle_mins += user_res["idle_minutes"]
+            total_locked_mins += user_res["locked_minutes"]
+            total_tracked_mins += user_res["tracked_minutes"]
+            total_active_mins += user_res["active_minutes"]
+            
+            for app in user_res["productive_apps"] + user_res["neutral_apps"] + user_res["unproductive_apps"]:
+                app_durations[app["name"]] += app["duration"]
+            for site in user_res["productive_sites"] + user_res["neutral_sites"] + user_res["unproductive_sites"]:
+                site_durations[site["domain"]] += site["duration"]
+
+    productivity = int(round(sum(user_scores) / len(user_scores))) if user_scores else 0
+    efficiency_ratio = round(sum(user_efficiencies) / len(user_efficiencies), 4) if user_efficiencies else 0.0
+    activity_ratio = round(sum(user_activities) / len(user_activities), 4) if user_activities else 0.0
+    
+    apps_list = []
+    total_app_sec = sum(app_durations.values())
+    for name, dur in app_durations.items():
+        pct = round((dur / total_app_sec) * 100) if total_app_sec > 0 else 0
+        cat = classify_app(name)
+        category = "distracting" if cat == "unproductive" else cat
+        apps_list.append({"name": name, "duration": dur, "percentage": pct, "category": category})
+    apps_list.sort(key=lambda x: x["duration"], reverse=True)
+    
+    sites_list = []
+    total_site_sec = sum(site_durations.values())
+    for domain, dur in site_durations.items():
+        pct = round((dur / total_site_sec) * 100) if total_site_sec > 0 else 0
+        cat = classify_website(domain)
+        category = "distracting" if cat == "unproductive" else cat
+        sites_list.append({"domain": domain, "duration": dur, "percentage": pct, "category": category})
+    sites_list.sort(key=lambda x: x["duration"], reverse=True)
+
+    return {
+        "tracked_mins": round(total_tracked_mins, 1),
+        "active_mins": round(total_active_mins, 1),
+        "idle_mins": round(total_idle_mins, 1),
+        "locked_mins": round(total_locked_mins, 1),
+        "productive_mins": round(total_prod_mins, 1),
+        "neutral_mins": round(total_neutral_mins, 1),
+        "unproductive_mins": round(total_unprod_mins, 1),
+        "efficiency_ratio": efficiency_ratio,
+        "activity_ratio": activity_ratio,
+        "productivity": productivity,
+        "apps": apps_list,
+        "sites": sites_list,
+        "screenshots": screenshots_list,
+        "screenshot_count": len(screenshots_list)
+    }
 
 def _build_user_summary(user):
     """Build full stats summary for a user."""
     uid = str(user["_id"])
-    sessions = _get_user_sessions(uid)
+    stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
 
-    total_active_mins = 0
-    total_idle_mins = 0
-    for s in sessions:
-        act, idl = _resolve_session_active_idle(s)
-        total_active_mins += act
-        total_idle_mins += idl
-    total_active_mins = round(total_active_mins, 2)
-    total_idle_mins = round(total_idle_mins, 2)
-    total_time = round(total_active_mins + total_idle_mins, 2)
-    productivity = round((total_active_mins / total_time) * 100) if total_time > 0 else 0
-    work_hours = round(total_active_mins / 60, 2)
-    break_hours = round(total_idle_mins / 60, 2)
+    all_sessions = _get_user_sessions(uid)
+    latest_session = all_sessions[0] if all_sessions else None
+    state_doc = monitoring_states_collection.find_one({"user_id": uid})
 
-    latest_session = sessions[0] if sessions else None
-
+    # currentApp / currentSite
     current_app = "-"
     current_site = "-"
     if latest_session:
         sess_id = latest_session["_id"]
-        # Try session_id (ObjectId or string) first, then user_id direct field
         app_doc = applications_collection.find_one(
             {"session_id": {"$in": [sess_id, str(sess_id)]}},
             sort=[("start_time", -1)]
@@ -260,7 +491,7 @@ def _build_user_summary(user):
                 sort=[("start_time", -1)]
             )
         if app_doc:
-            current_app = app_doc.get("app_name") or "-"
+            current_app = app_doc.get("app_name") or app_doc.get("application_name") or "-"
 
         site_doc = websites_collection.find_one(
             {"session_id": {"$in": [sess_id, str(sess_id)]}},
@@ -272,7 +503,7 @@ def _build_user_summary(user):
                 sort=[("start_time", -1)]
             )
         if site_doc:
-            current_site = site_doc.get("website") or "-"
+            current_site = site_doc.get("website") or site_doc.get("domain") or "-"
 
     # Avatar color palette
     palette = [
@@ -287,7 +518,6 @@ def _build_user_summary(user):
     joined_date = (user.get("created_at") or "")[:10] or "-"
 
     status = "offline"
-    state_doc = monitoring_states_collection.find_one({"user_id": uid})
     if state_doc:
         state = state_doc.get("current_state", "STOPPED")
         lh = state_doc.get("last_heartbeat")
@@ -317,12 +547,12 @@ def _build_user_summary(user):
         "email": user["email"],
         "role": user.get("role", "intern"),
         "status": status,
-        "workHours": work_hours,
-        "breakHours": break_hours,
+        "workHours": round(stats["active_mins"] / 60, 1),
+        "breakHours": round(stats["idle_mins"] / 60, 1),
         "currentApp": current_app,
         "currentSite": current_site,
         "lastActive": latest_session.get("start_time", "-") if latest_session else "-",
-        "productivity": productivity,
+        "productivity": stats["productivity"],
         "task": user.get("task", None),
         "avatarColor": avatar_color,
         "timezone": user.get("timezone", "IST"),
@@ -336,7 +566,7 @@ def _build_user_summary(user):
 
 @reports_bp.route("/recent-activity", methods=["GET"])
 def get_recent_activity():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     events = []
 
     # Build user map: _id str → user doc
@@ -491,205 +721,64 @@ def get_user_summary():
 # ─────────────────────────────────────────────────
 
 @reports_bp.route("/intern-summary/<user_id>", methods=["GET"])
-def get_intern_summary(user_id):
+def get_intern_summary(user_id, dashboard=False):
     try:
         user = users_collection.find_one({"_id": ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
         uid = str(user["_id"])
+        state_doc = monitoring_states_collection.find_one({"user_id": uid})
         all_sessions = _get_user_sessions(uid)
         session_id_filter = request.args.get("session_id")
 
-        stats_sessions = all_sessions
-        if session_id_filter and session_id_filter != "all":
-            stats_sessions = [s for s in all_sessions if str(s["_id"]) == session_id_filter]
+        if session_id_filter in ("today", "TODAY_SCOPE"):
+            stats = aggregate_telemetry(uid, "TODAY_SCOPE")
+        elif session_id_filter in ("week", "WEEK_SCOPE"):
+            stats = aggregate_telemetry(uid, "WEEK_SCOPE")
+        elif session_id_filter and session_id_filter not in ("all", "ALL_TIME_SCOPE", ""):
+            stats = aggregate_telemetry(uid, "SESSION_SCOPE", session_id=session_id_filter)
+        else:
+            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
 
-        # Session ID set for telemetry matching
-        stats_session_oids = {s["_id"] for s in stats_sessions}
-        stats_session_strs = {str(s["_id"]) for s in stats_sessions}
+        # Always calculate today's telemetry stats for the today fields
+        today_stats = aggregate_telemetry(uid, "TODAY_SCOPE")
 
-        def _session_matches(raw_sid):
-            if isinstance(raw_sid, ObjectId):
-                return raw_sid in stats_session_oids
-            if isinstance(raw_sid, str) and len(raw_sid) == 24:
-                try:
-                    return ObjectId(raw_sid) in stats_session_oids
-                except Exception:
-                    pass
-            return raw_sid in stats_session_strs
+        apps_list = stats["apps"]
+        sites_list = stats["sites"]
+        total_active_mins = stats["active_mins"]
+        total_idle_mins = stats["idle_mins"]
+        total_work_mins = stats["tracked_mins"]
+        productivity = stats["productivity"]
+        screenshots_list = stats["screenshots"]
+        screenshot_count = stats["screenshot_count"]
 
-        # ── Basic stats ────────────────────────────
-        total_active_mins = 0
-        total_idle_mins = 0
-        for s in stats_sessions:
-            act, idl = _resolve_session_active_idle(s)
-            total_active_mins += act
-            total_idle_mins += idl
-        total_active_mins = round(total_active_mins, 2)
-        total_idle_mins = round(total_idle_mins, 2)
-        total_work_mins = round(total_active_mins + total_idle_mins, 2)
-        productivity = round((total_active_mins / total_work_mins) * 100) if total_work_mins > 0 else 0
-
-        # Calculate today's metrics
-        today_local_dt = datetime.utcnow() + timedelta(minutes=330)
-        today_prefix = today_local_dt.strftime("%Y-%m-%d")
-        
-        today_sessions = []
-        for s in all_sessions:
-            local_dt = _utc_to_local_ist(s.get("start_time"))
-            if local_dt and local_dt.strftime("%Y-%m-%d") == today_prefix:
-                today_sessions.append(s)
-
-        today_active_mins = 0
-        today_idle_mins = 0
-        for s in today_sessions:
-            act, idl = _resolve_session_active_idle(s)
-            today_active_mins += act
-            today_idle_mins += idl
-        today_active_mins = round(today_active_mins, 2)
-        today_idle_mins = round(today_idle_mins, 2)
-        today_work_mins_val = round(today_active_mins + today_idle_mins, 2)
-        today_productivity = round((today_active_mins / today_work_mins_val) * 100) if today_work_mins_val > 0 else 0
+        today_apps_list = [{
+            "name": app["name"],
+            "duration": app["duration"],
+            "percentage": app.get("percentage", 0),
+            "category": app.get("category", "neutral")
+        } for app in today_stats["apps"]]
+        today_sites_list = [{
+            "domain": site["domain"],
+            "duration": site["duration"],
+            "percentage": site.get("percentage", 0),
+            "category": site.get("category", "neutral")
+        } for site in today_stats["sites"]]
+        today_screenshots = today_stats["screenshots"]
+        today_active_mins = today_stats["active_mins"]
+        today_idle_mins = today_stats["idle_mins"]
+        today_work_mins_val = today_stats["tracked_mins"]
+        today_productivity = today_stats["productivity"]
         today_work_hours = round(today_active_mins / 60, 2)
         today_break_hours = round(today_idle_mins / 60, 2)
-
-        # Today's apps and sites
-        today_session_oids = {s["_id"] for s in today_sessions}
-        today_session_strs = {str(s["_id"]) for s in today_sessions}
-
-        def _is_today_session(raw_sid):
-            if isinstance(raw_sid, ObjectId):
-                return raw_sid in today_session_oids
-            if isinstance(raw_sid, str) and len(raw_sid) == 24:
-                try:
-                    return ObjectId(raw_sid) in today_session_oids
-                except Exception:
-                    pass
-            return raw_sid in today_session_strs
-
-        today_app_durations = defaultdict(int)
-        for app in applications_collection.find():
-            raw_sid = app.get("session_id")
-            matched = _is_today_session(raw_sid)
-            if not matched:
-                sess = _resolve_session_for_telemetry(app)
-                if sess and sess["_id"] in today_session_oids:
-                    matched = True
-            if matched:
-                name = app.get("application_name") or app.get("app_name") or "No Application Metadata"
-                if name == "Unknown":
-                    name = "No Application Metadata"
-                today_app_durations[name] += app.get("duration_seconds") or app.get("duration") or 0
-
-        today_apps_list = []
-        for name, dur in today_app_durations.items():
-            today_apps_list.append({"name": name, "duration": dur})
-        today_apps_list.sort(key=lambda x: x["duration"], reverse=True)
-
-        today_site_durations = defaultdict(int)
-        for site in websites_collection.find():
-            raw_sid = site.get("session_id")
-            matched = _is_today_session(raw_sid)
-            if not matched:
-                sess = _resolve_session_for_telemetry(site)
-                if sess and sess["_id"] in today_session_oids:
-                    matched = True
-            if matched:
-                domain = site.get("domain") or site.get("website") or "Unknown"
-                today_site_durations[domain] += site.get("duration_seconds") or site.get("duration") or 0
-
-        today_sites_list = []
-        for domain, dur in today_site_durations.items():
-            today_sites_list.append({"domain": domain, "duration": dur})
-        today_sites_list.sort(key=lambda x: x["duration"], reverse=True)
-
-        # ── Applications ───────────────────────────
-        app_durations = defaultdict(int)
-        for app in applications_collection.find():
-            raw_sid = app.get("session_id")
-            matched = _session_matches(raw_sid)
-            if not matched:
-                # Fallback: resolve by time overlap
-                sess = _resolve_session_for_telemetry(app)
-                if sess and sess["_id"] in stats_session_oids:
-                    matched = True
-            if matched:
-                name = app.get("application_name") or app.get("app_name") or "No Application Metadata"
-                if name == "Unknown":
-                    name = "No Application Metadata"
-                app_durations[name] += app.get("duration_seconds") or app.get("duration") or 0
-
-        total_app_seconds = sum(app_durations.values())
-        apps_list = []
-        for name, dur in app_durations.items():
-            pct = round((dur / total_app_seconds) * 100) if total_app_seconds > 0 else 0
-            nl = name.lower()
-            is_productive = any(kw.lower() in nl or nl in kw.lower() for kw in PRODUCTIVE_APPS)
-            is_distracting = any(kw.lower() in nl or nl in kw.lower() for kw in DISTRACTING_APPS)
-            category = "productive" if is_productive else ("distracting" if is_distracting else "neutral")
-            apps_list.append({"name": name, "duration": dur, "percentage": pct, "category": category})
-        apps_list.sort(key=lambda x: x["duration"], reverse=True)
-
-        # ── Websites ───────────────────────────────
-        site_durations = defaultdict(int)
-        for site in websites_collection.find():
-            raw_sid = site.get("session_id")
-            matched = _session_matches(raw_sid)
-            if not matched:
-                sess = _resolve_session_for_telemetry(site)
-                if sess and sess["_id"] in stats_session_oids:
-                    matched = True
-            if matched:
-                domain = site.get("domain") or site.get("website") or "Unknown"
-                site_durations[domain] += site.get("duration_seconds") or site.get("duration") or 0
-
-        total_site_seconds = sum(site_durations.values())
-        sites_list = []
-        for domain, dur in site_durations.items():
-            pct = round((dur / total_site_seconds) * 100) if total_site_seconds > 0 else 0
-            dl = domain.lower()
-            is_productive = any(kw.lower() in dl or dl in kw.lower() for kw in PRODUCTIVE_SITES)
-            is_distracting = any(kw.lower() in dl or dl in kw.lower() for kw in DISTRACTING_SITES)
-            category = "productive" if is_productive else ("distracting" if is_distracting else "neutral")
-            sites_list.append({"domain": domain, "duration": dur, "percentage": pct, "category": category})
-        sites_list.sort(key=lambda x: x["duration"], reverse=True)
-
-        # ── Screenshots ────────────────────────────
-        screenshots_list = []
-        screenshot_count = 0
-
-        # Primary: screenshots with user_id field (directly owned)
-        direct_shots = list(screenshots_collection.find({"user_id": uid}).sort("captured_at", -1))
-        for shot in direct_shots:
-            fmt_shot = _format_screenshot(shot)
-            if fmt_shot:
-                screenshot_count += 1
-                screenshots_list.append(fmt_shot)
-
-        if not screenshots_list and not direct_shots:
-            # Fallback: resolve via session_id
-            for shot in screenshots_collection.find().sort("captured_at", -1):
-                raw_sid = shot.get("session_id")
-                matched = _session_matches(raw_sid)
-                if not matched:
-                    sess = _resolve_session_for_telemetry(shot, time_field="captured_at")
-                    if sess and sess["_id"] in stats_session_oids:
-                        matched = True
-                if matched:
-                    fmt_shot = _format_screenshot(shot)
-                    if fmt_shot:
-                        screenshot_count += 1
-                        screenshots_list.append(fmt_shot)
-
-        screenshots_list.sort(key=lambda x: x.get("captured_at", ""), reverse=True)
 
         # ── Projects & Tasks ───────────────────────
         user_oids = [uid]
         if ObjectId.is_valid(uid):
             user_oids.append(ObjectId(uid))
 
-        role = user.get("role", "intern")
+        role = user.get("role", "intern").lower()
         if role in ["team_lead", "team lead"]:
             projects = list(projects_collection.find({"lead_id": {"$in": user_oids}}))
         else:
@@ -700,13 +789,17 @@ def get_intern_summary(user_id):
 
         # ── Session history ────────────────────────
         serialized_sessions = []
+        from config.productivity_rules import calculate_productivity
         for s in all_sessions[:20]:
+            sess_res = calculate_productivity(uid, str(s["_id"]))
             serialized_sessions.append({
                 "id": str(s["_id"]),
                 "start_time": s.get("start_time", ""),
                 "end_time": s.get("end_time", ""),
-                "active_minutes": s.get("active_minutes", 0),
-                "idle_minutes": s.get("idle_minutes", 0),
+                "active_minutes": round(sess_res["active_minutes"], 1),
+                "idle_minutes": round(sess_res["idle_minutes"], 1),
+                "locked_minutes": round(sess_res["locked_minutes"], 1),
+                "productivity": sess_res["productivity"],
                 "status": s.get("status", "ENDED")
             })
 
@@ -724,7 +817,6 @@ def get_intern_summary(user_id):
 
         latest_session = all_sessions[0] if all_sessions else None
         status = "offline"
-        state_doc = monitoring_states_collection.find_one({"user_id": uid})
         if state_doc:
             state = state_doc.get("current_state", "STOPPED")
             lh = state_doc.get("last_heartbeat")
@@ -791,17 +883,48 @@ def get_intern_summary(user_id):
             "avatarColor": avatar_color,
             "timezone": user.get("timezone", "IST"),
             "joinedDate": joined_date,
+            # Explainable today's metrics
+            "today_productive_mins": round(today_stats.get("productive_mins", 0.0), 1),
+            "today_neutral_mins": round(today_stats.get("neutral_mins", 0.0), 1),
+            "today_unproductive_mins": round(today_stats.get("unproductive_mins", 0.0), 1),
+            "today_locked_mins": round(today_stats.get("locked_mins", 0.0), 1),
+            "today_idle_mins": round(today_stats.get("idle_mins", 0.0), 1),
+            "today_efficiency": round((today_stats.get("efficiency_ratio", 0.0) * 100.0), 1),
+            "today_activity_ratio": round((today_stats.get("activity_ratio", 0.0) * 100.0), 1),
+
+            # Explainable total/historical metrics
+            "total_productive_mins": round(stats.get("productive_mins", 0.0), 1),
+            "total_neutral_mins": round(stats.get("neutral_mins", 0.0), 1),
+            "total_unproductive_mins": round(stats.get("unproductive_mins", 0.0), 1),
+            "total_locked_mins": round(stats.get("locked_mins", 0.0), 1),
+            "total_idle_mins": round(stats.get("idle_mins", 0.0), 1),
+            "total_efficiency": round((stats.get("efficiency_ratio", 0.0) * 100.0), 1),
+            "total_activity_ratio": round((stats.get("activity_ratio", 0.0) * 100.0), 1),
+
+            # Scope-specific explainable metrics
+            "scope_tracked_mins": round(stats.get("tracked_mins", 0.0), 1),
+            "scope_active_mins": round(stats.get("active_mins", 0.0), 1),
+            "scope_idle_mins": round(stats.get("idle_mins", 0.0), 1),
+            "scope_locked_mins": round(stats.get("locked_mins", 0.0), 1),
+            "scope_productive_mins": round(stats.get("productive_mins", 0.0), 1),
+            "scope_neutral_mins": round(stats.get("neutral_mins", 0.0), 1),
+            "scope_unproductive_mins": round(stats.get("unproductive_mins", 0.0), 1),
+            "scope_efficiency": round((stats.get("efficiency_ratio", 0.0) * 100.0), 1),
+            "scope_activity_ratio": round((stats.get("activity_ratio", 0.0) * 100.0), 1),
+            "scope_productivity": stats.get("productivity", 0),
+
             # Rich analytics
-            "total_active_mins": total_active_mins,
-            "total_idle_mins": total_idle_mins,
-            "total_work_mins": total_work_mins,
-            "today_active_mins": today_active_mins,
-            "today_idle_mins": today_idle_mins,
-            "today_work_mins": today_work_mins_val,
+            "total_active_mins": round(total_active_mins, 1),
+            "total_idle_mins": round(total_idle_mins, 1),
+            "total_work_mins": round(total_work_mins, 1),
+            "today_active_mins": round(today_active_mins, 1),
+            "today_idle_mins": round(today_idle_mins, 1),
+            "today_work_mins": round(today_work_mins_val, 1),
             "apps": apps_list,
             "sites": sites_list,
             "today_apps": today_apps_list,
             "today_sites": today_sites_list,
+            "today_screenshots": today_screenshots[:24],
             "screenshot_count": screenshot_count,
             "screenshots": screenshots_list[:24],
             "app_count": len(apps_list),
@@ -878,28 +1001,36 @@ def _format_screenshot(shot):
     }
 
 
-def _build_team_lead_stats(lead_id: str, lead_user: dict):
+def _build_team_lead_stats(lead_id: str, lead_user: dict, scope: str = "ALL_TIME_SCOPE"):
     """Build analytics for a team lead view."""
     lead_oids = [lead_id]
     if ObjectId.is_valid(lead_id):
         lead_oids.append(ObjectId(lead_id))
     led_projects = list(projects_collection.find({"lead_id": {"$in": lead_oids}}))
 
-    # Gather all member IDs
+    # Gather all member IDs (excluding lead)
     all_member_ids = set()
     for p in led_projects:
         for mid in p.get("member_ids", []):
-            all_member_ids.add(str(mid))
+            mid_str = str(mid)
+            if mid_str != lead_id:
+                all_member_ids.add(mid_str)
 
     members = list(users_collection.find({"_id": {"$in": [
         ObjectId(m) if ObjectId.is_valid(m) else m for m in all_member_ids
     ]}}))
 
-    # Monitoring statuses
+    member_ids_str = [str(m["_id"]) for m in members]
+
+    # Preload monitoring states
+    all_states = list(monitoring_states_collection.find({"user_id": {"$in": member_ids_str}}))
+    states_cache = {str(doc["user_id"]): doc for doc in all_states}
+
+    # Monitoring statuses for member states list
     member_states = []
     for m in members:
         uid = str(m["_id"])
-        state_doc = monitoring_states_collection.find_one({"user_id": uid})
+        state_doc = states_cache.get(uid)
         state = state_doc.get("current_state", "STOPPED") if state_doc else "STOPPED"
         online = False
         if state_doc:
@@ -930,68 +1061,32 @@ def _build_team_lead_stats(lead_id: str, lead_user: dict):
     in_progress_tasks = sum(1 for t in team_tasks if t.get("status") in ("In Progress", "in_progress"))
     done_tasks = sum(1 for t in team_tasks if t.get("status") in ("Completed", "completed", "done", "Approved", "approved"))
 
-    # Productivity & active/idle times
-    total_prod = 0
-    total_active_mins = 0
-    total_idle_mins = 0
-    team_apps = set()
-    team_sites = set()
-    member_count = len(members)
-
-    for m in members:
-        uid = str(m["_id"])
-        sessions = _get_user_sessions(uid)
-        
-        m_active = 0
-        m_idle = 0
-        for s in sessions:
-            act, idl = _resolve_session_active_idle(s)
-            m_active += act
-            m_idle += idl
-        total_active_mins += m_active
-        total_idle_mins += m_idle
-        
-        m_total = m_active + m_idle
-        total_prod += round((m_active / m_total) * 100) if m_total > 0 else 0
-
-        # Unique apps and sites used by this member
-        session_oids = {s["_id"] for s in sessions}
-        session_strs = {str(s["_id"]) for s in sessions}
-        
-        user_ids = _resolve_user_ids(uid)
-        for app in applications_collection.find({"$or": [{"session_id": {"$in": list(session_oids) + list(session_strs)}}, {"user_id": {"$in": user_ids}}]}):
-            name = app.get("app_name") or app.get("application_name")
-            if name and name != "Unknown":
-                team_apps.add(name)
-
-        for site in websites_collection.find({"$or": [{"session_id": {"$in": list(session_oids) + list(session_strs)}}, {"user_id": {"$in": user_ids}}]}):
-            domain = site.get("domain") or site.get("website")
-            if domain and domain != "Unknown":
-                team_sites.add(domain)
-
-    team_productivity = round(total_prod / member_count) if member_count > 0 else 0
-
-    # Screenshot count for team
-    shot_count = 0
-    for m in members:
-        uid = str(m["_id"])
-        shot_count += screenshots_collection.count_documents({"user_id": uid})
+    # Team Telemetry via TEAM_SCOPE
+    team_historical = aggregate_telemetry(lead_id, scope, visibility_scope="TEAM_SCOPE")
+    team_today = aggregate_telemetry(lead_id, "TODAY_SCOPE", visibility_scope="TEAM_SCOPE")
 
     return {
         "led_project_count": len(led_projects),
         "managed_member_count": len(members),
         "active_members": active_members,
-        "team_productivity": team_productivity,
-        "team_active_mins": round(total_active_mins, 2),
-        "team_idle_mins": round(total_idle_mins, 2),
-        "team_apps_count": len(team_apps),
-        "team_sites_count": len(team_sites),
+        "team_productivity": team_historical["productivity"],
+        "team_active_mins": round(team_historical["active_mins"], 2),
+        "team_idle_mins": round(team_historical["idle_mins"], 2),
+        "team_apps_count": len(team_historical["apps"]),
+        "team_sites_count": len(team_historical["sites"]),
         "team_task_count": len(team_tasks),
         "pending_tasks": pending_tasks,
         "in_progress_tasks": in_progress_tasks,
         "done_tasks": done_tasks,
-        "team_screenshot_count": shot_count,
-        "member_monitoring": member_states
+        "team_screenshot_count": team_historical["screenshot_count"],
+        "member_monitoring": member_states,
+        "team_apps": team_historical["apps"],
+        "team_sites": team_historical["sites"],
+        "team_today_apps": team_today["apps"],
+        "team_today_sites": team_today["sites"],
+        "team_today_active_mins": round(team_today["active_mins"], 2),
+        "team_today_idle_mins": round(team_today["idle_mins"], 2),
+        "team_today_productivity": team_today["productivity"]
     }
 
 
@@ -1001,7 +1096,7 @@ def _build_team_lead_stats(lead_id: str, lead_user: dict):
 
 @reports_bp.route("/screenshots", methods=["GET"])
 def get_screenshot_report():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     date = request.args.get("date")
 
     caller_id = request.headers.get("X-User-Id")
@@ -1199,110 +1294,98 @@ def get_screenshot_report():
 
 @reports_bp.route("/app-usage", methods=["GET"])
 def get_app_usage():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     caller_id = request.headers.get("X-User-Id")
     
-    allowed_uids = _resolve_allowed_uids(caller_id, employee_id)
-    if allowed_uids is not None:
-        session_oids = set()
-        for uid in allowed_uids:
-            session_oids.update(_get_session_ids_for_user(uid))
-    else:
-        session_oids = None
+    caller_role = "intern"
+    if caller_id:
+        caller = users_collection.find_one({"_id": ObjectId(caller_id) if ObjectId.is_valid(caller_id) else caller_id})
+        if caller:
+            caller_role = caller.get("role", "intern").lower()
 
-    usage = {}
-    for app in applications_collection.find():
-        if session_oids is not None:
-            raw_sid = app.get("session_id")
-            matched = False
-            if isinstance(raw_sid, ObjectId):
-                matched = raw_sid in session_oids
-            elif isinstance(raw_sid, str) and len(raw_sid) == 24:
-                try:
-                    matched = ObjectId(raw_sid) in session_oids
-                except Exception:
-                    pass
-            if not matched:
-                sess = _resolve_session_for_telemetry(app)
-                if sess and sess["_id"] in session_oids:
-                    matched = True
-            if not matched:
-                continue
+    if caller_role == "intern":
+        vis_scope = "INTERN_SCOPE"
+        target_uid = caller_id
+    elif caller_role in ["team_lead", "team lead"]:
+        if employee_id:
+            # Check if this user is a team member or himself
+            allowed = _resolve_allowed_uids(caller_id)
+            if employee_id in allowed or employee_id == caller_id:
+                vis_scope = "INTERN_SCOPE"
+                target_uid = employee_id
+            else:
+                return jsonify([])
+        else:
+            vis_scope = "TEAM_SCOPE"
+            target_uid = caller_id
+    else: # admin
+        if employee_id:
+            vis_scope = "INTERN_SCOPE"
+            target_uid = employee_id
+        else:
+            vis_scope = "ADMIN_SCOPE"
+            target_uid = caller_id
 
-        name = app.get("app_name") or app.get("application_name") or "No Application Metadata"
-        if name == "Unknown":
-            name = "No Application Metadata"
-        seconds = app.get("duration_seconds") or app.get("duration") or 0
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope)
+    
+    # Format and sort
+    apps_list = []
+    for app in stats["apps"]:
+        name = app["name"]
+        dur = app["duration"]
+        category = app["category"]
+        mins = max(1, int(round(dur / 60))) if dur > 0 else 0
+        apps_list.append({"name": name, "category": category, "minutes": mins})
+        
+    return jsonify(apps_list)
 
-        nl = name.lower()
-        is_productive = any(kw.lower() in nl or nl in kw.lower() for kw in PRODUCTIVE_APPS)
-        is_distracting = any(kw.lower() in nl or nl in kw.lower() for kw in DISTRACTING_APPS)
-        category = "productive" if is_productive else ("distracting" if is_distracting else "neutral")
-
-        if name not in usage:
-            usage[name] = {"name": name, "category": category, "seconds": 0}
-        usage[name]["seconds"] += seconds
-
-    for name in usage:
-        usage[name]["minutes"] = max(1, int(round(usage[name]["seconds"] / 60))) if usage[name]["seconds"] > 0 else 0
-        del usage[name]["seconds"]
-
-    return jsonify(list(usage.values()))
-
-
-# ─────────────────────────────────────────────────
-# Site Usage
-# ─────────────────────────────────────────────────
 
 @reports_bp.route("/site-usage", methods=["GET"])
 def get_site_usage():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     caller_id = request.headers.get("X-User-Id")
     
-    allowed_uids = _resolve_allowed_uids(caller_id, employee_id)
-    if allowed_uids is not None:
-        session_oids = set()
-        for uid in allowed_uids:
-            session_oids.update(_get_session_ids_for_user(uid))
-    else:
-        session_oids = None
+    caller_role = "intern"
+    if caller_id:
+        caller = users_collection.find_one({"_id": ObjectId(caller_id) if ObjectId.is_valid(caller_id) else caller_id})
+        if caller:
+            caller_role = caller.get("role", "intern").lower()
 
-    usage = {}
-    for site in websites_collection.find():
-        if session_oids is not None:
-            raw_sid = site.get("session_id")
-            matched = False
-            if isinstance(raw_sid, ObjectId):
-                matched = raw_sid in session_oids
-            elif isinstance(raw_sid, str) and len(raw_sid) == 24:
-                try:
-                    matched = ObjectId(raw_sid) in session_oids
-                except Exception:
-                    pass
-            if not matched:
-                sess = _resolve_session_for_telemetry(site)
-                if sess and sess["_id"] in session_oids:
-                    matched = True
-            if not matched:
-                continue
+    if caller_role == "intern":
+        vis_scope = "INTERN_SCOPE"
+        target_uid = caller_id
+    elif caller_role in ["team_lead", "team lead"]:
+        if employee_id:
+            # Check if this user is a team member or himself
+            allowed = _resolve_allowed_uids(caller_id)
+            if employee_id in allowed or employee_id == caller_id:
+                vis_scope = "INTERN_SCOPE"
+                target_uid = employee_id
+            else:
+                return jsonify([])
+        else:
+            vis_scope = "TEAM_SCOPE"
+            target_uid = caller_id
+    else: # admin
+        if employee_id:
+            vis_scope = "INTERN_SCOPE"
+            target_uid = employee_id
+        else:
+            vis_scope = "ADMIN_SCOPE"
+            target_uid = caller_id
 
-        domain = site.get("website") or site.get("domain") or "Unknown"
-        seconds = site.get("duration_seconds") or site.get("duration") or 0
-
-        dl = domain.lower()
-        is_productive = any(kw.lower() in dl or dl in kw.lower() for kw in PRODUCTIVE_SITES)
-        is_distracting = any(kw.lower() in dl or dl in kw.lower() for kw in DISTRACTING_SITES)
-        category = "productive" if is_productive else ("distracting" if is_distracting else "neutral")
-
-        if domain not in usage:
-            usage[domain] = {"domain": domain, "category": category, "seconds": 0}
-        usage[domain]["seconds"] += seconds
-
-    for domain in usage:
-        usage[domain]["minutes"] = max(1, int(round(usage[domain]["seconds"] / 60))) if usage[domain]["seconds"] > 0 else 0
-        del usage[domain]["seconds"]
-
-    return jsonify(list(usage.values()))
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope)
+    
+    # Format and sort
+    sites_list = []
+    for site in stats["sites"]:
+        domain = site["domain"]
+        dur = site["duration"]
+        category = site["category"]
+        mins = max(1, int(round(dur / 60))) if dur > 0 else 0
+        sites_list.append({"domain": domain, "category": category, "minutes": mins})
+        
+    return jsonify(sites_list)
 
 
 # ─────────────────────────────────────────────────
@@ -1311,56 +1394,55 @@ def get_site_usage():
 
 @reports_bp.route("/productivity-trend", methods=["GET"])
 def get_productivity_trend():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     caller_id = request.headers.get("X-User-Id")
     try:
         num_days = int(request.args.get("days", 7))
     except ValueError:
         num_days = 7
 
-    today = datetime.now()
-    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
+    today_local = datetime.utcnow() + timedelta(minutes=330)
+    dates = [(today_local - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
     dates.reverse()
+
+    caller_role = "intern"
+    if caller_id:
+        caller = users_collection.find_one({"_id": ObjectId(caller_id) if ObjectId.is_valid(caller_id) else caller_id})
+        if caller:
+            caller_role = caller.get("role", "intern").lower()
 
     allowed_uids = _resolve_allowed_uids(caller_id, employee_id)
     
-    session_query = {}
     if allowed_uids is not None:
-        all_resolved_ids = []
-        for uid in allowed_uids:
-            all_resolved_ids.extend(_resolve_user_ids(uid))
-        session_query["user_id"] = {"$in": all_resolved_ids}
+        target_uids = list(allowed_uids)
+        if caller_role in ["team_lead", "team lead"] and not employee_id:
+            if caller_id not in target_uids:
+                target_uids.append(caller_id)
+    else:
+        all_users = list(users_collection.find({}, {"_id": 1}))
+        target_uids = [str(u["_id"]) for u in all_users]
 
-    # Filter by date range directly in MongoDB to avoid full table scans
-    oldest_date = (today - timedelta(days=num_days + 2)).strftime("%Y-%m-%d")
-    session_query["start_time"] = {"$gte": oldest_date}
-
-    sessions_by_date = defaultdict(list)
-    for s in sessions_collection.find(session_query):
-        start_time = s.get("start_time", "")
-        local_dt = _utc_to_local_ist(start_time)
-        if local_dt:
-            local_date = local_dt.strftime("%Y-%m-%d")
-            sessions_by_date[local_date].append(s)
-        elif start_time and len(start_time) >= 10:
-            sessions_by_date[start_time[:10]].append(s)
+    from config.productivity_rules import calculate_productivity
 
     trend = []
     for date_str in dates:
-        day_sessions = sessions_by_date.get(date_str, [])
-        total_active = 0
-        total_idle = 0
-        for s in day_sessions:
-            act, idl = _resolve_session_active_idle(s)
-            total_active += act
-            total_idle += idl
-        total_time = total_active + total_idle
-        prod_score = round((total_active / total_time) * 100) if total_time > 0 else 0
+        day_scores = []
+        for uid in target_uids:
+            res = calculate_productivity(uid, date_str)
+            if res["tracked_minutes"] > 0:
+                day_scores.append(res["productivity"])
+                
+        if day_scores:
+            day_avg = int(round(sum(day_scores) / len(day_scores)))
+        else:
+            day_avg = 0
+            
         try:
             day_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a")
         except Exception:
             day_name = date_str
-        trend.append({"day": day_name, "date": date_str, "productivity": prod_score})
+            
+        trend.append({"day": day_name, "date": date_str, "productivity": day_avg})
 
     return jsonify(trend)
 
@@ -1371,45 +1453,31 @@ def get_productivity_trend():
 
 @reports_bp.route("/work-time-trend", methods=["GET"])
 def get_work_time_trend():
-    employee_id = request.args.get("employee_id")
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
     try:
         num_days = int(request.args.get("days", 7))
     except ValueError:
         num_days = 7
 
-    today = datetime.now()
-    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
+    today_local = datetime.utcnow() + timedelta(minutes=330)
+    dates = [(today_local - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
     dates.reverse()
 
-    session_query = {}
-    if employee_id:
-        user = users_collection.find_one({"_id": ObjectId(employee_id) if ObjectId.is_valid(employee_id) else employee_id})
-        if user:
-            ids = _resolve_user_ids(str(user["_id"]))
-            session_query["user_id"] = {"$in": ids}
-
-    # Filter by date range directly in MongoDB to avoid full table scans
-    oldest_date = (today - timedelta(days=num_days + 2)).strftime("%Y-%m-%d")
-    session_query["start_time"] = {"$gte": oldest_date}
-
-    sessions_by_date = defaultdict(list)
-    for s in sessions_collection.find(session_query):
-        start_time = s.get("start_time", "")
-        local_dt = _utc_to_local_ist(start_time)
-        if local_dt:
-            local_date = local_dt.strftime("%Y-%m-%d")
-            sessions_by_date[local_date].append(s)
-        elif start_time and len(start_time) >= 10:
-            sessions_by_date[start_time[:10]].append(s)
+    from config.productivity_rules import calculate_productivity
 
     trend = []
     for date_str in dates:
-        day_sessions = sessions_by_date.get(date_str, [])
-        total_active_mins = 0
-        for s in day_sessions:
-            act, idl = _resolve_session_active_idle(s)
-            total_active_mins += act
-        work_hours = round(total_active_mins / 60, 1)
+        if employee_id:
+            res = calculate_productivity(employee_id, date_str)
+            work_hours = round(res["active_minutes"] / 60.0, 1)
+        else:
+            all_users = list(users_collection.find({}, {"_id": 1}))
+            total_active = 0.0
+            for u in all_users:
+                res = calculate_productivity(str(u["_id"]), date_str)
+                total_active += res["active_minutes"]
+            work_hours = round(total_active / 60.0, 1)
+
         try:
             day_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a")
         except Exception:
@@ -1417,6 +1485,45 @@ def get_work_time_trend():
         trend.append({"day": day_name, "date": date_str, "hours": work_hours, "work_hours": work_hours})
 
     return jsonify(trend)
+
+
+# ─────────────────────────────────────────────────
+# Public Stats (For Landing Page)
+# ─────────────────────────────────────────────────
+
+@reports_bp.route("/public-stats", methods=["GET"])
+def get_public_stats():
+    try:
+        interns = list(users_collection.find({"role": {"$in": ["intern", "user"]}}))
+        registered_interns = len(interns)
+        
+        prod_scores = []
+        total_active_mins = 0.0
+        for intern in interns:
+            uid = str(intern["_id"])
+            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
+            if stats["tracked_mins"] > 0:
+                prod_scores.append(stats["productivity"])
+            total_active_mins += stats["active_mins"]
+            
+        avg_productivity = int(round(sum(prod_scores) / len(prod_scores))) if prod_scores else 0
+        hours_tracked = round(total_active_mins / 60.0, 1)
+        
+        active_users = monitoring_states_collection.count_documents({"current_state": "RUNNING"})
+        projects = projects_collection.count_documents({})
+        screenshots_captured = screenshots_collection.count_documents({})
+        
+        return jsonify({
+            "registered_interns": registered_interns,
+            "active_users": active_users,
+            "projects": projects,
+            "average_productivity": avg_productivity,
+            "hours_tracked": hours_tracked,
+            "screenshots_captured": screenshots_captured,
+            "today_active_monitoring": active_users
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─────────────────────────────────────────────────
@@ -1450,24 +1557,65 @@ def get_dashboard_data():
     from routes.monitoring import get_status, get_all_status
     from routes.users import get_users
     from routes.projects import get_assigned_projects
+    from database.mongodb import tasks_collection, projects_collection
+    from bson import ObjectId
+    from utils.serializer import serialize_doc
+
+    def _unwrap(res):
+        if isinstance(res, tuple):
+            res = res[0]
+        if hasattr(res, "get_json"):
+            try:
+                val = res.get_json()
+                if val is not None:
+                    return val
+            except Exception:
+                pass
+        if hasattr(res, "data"):
+            import json
+            try:
+                return json.loads(res.data.decode('utf-8'))
+            except Exception:
+                pass
+        return res
 
     if role in ("intern", "user"):
+        t0 = time.perf_counter()
         # 1. Summary
-        summary = get_intern_summary(user_id).get_json()
+        summary = _unwrap(get_intern_summary(user_id, dashboard=True)) or {}
+        t1 = time.perf_counter()
         
         # 2. Monitoring Status
-        monitoring_status = get_status(user_id).get_json()
+        monitoring_status = _unwrap(get_status(user_id)) or {}
+        t2 = time.perf_counter()
         
         # 3. Recent Activity
-        recent_activity = get_recent_activity().get_json()
+        recent_activity = _unwrap(get_recent_activity()) or []
+        t3 = time.perf_counter()
         
         # 4. Productivity Trend
-        productivity_trend = get_productivity_trend().get_json()
+        productivity_trend = _unwrap(get_productivity_trend()) or []
+        t4 = time.perf_counter()
+
+        # 5. Tasks & Projects
+        user_tasks = [serialize_doc(t) for t in tasks_collection.find({"assigned_to": user_id})]
+        user_projects = [serialize_doc(p) for p in projects_collection.find({"member_ids": {"$in": [user_id, ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id]}})]
+        t5 = time.perf_counter()
+
+        print(f"[DASHBOARD TIMING] Summary: {(t1-t0)*1000:.2f}ms | Status: {(t2-t1)*1000:.2f}ms | Activity: {(t3-t2)*1000:.2f}ms | Trend: {(t4-t3)*1000:.2f}ms | Tasks/Projects: {(t5-t4)*1000:.2f}ms")
         
-        return jsonify({
+        res_data = {
             "summary": summary,
+            "monitoring": monitoring_status,
             "monitoring_status": monitoring_status,
+            "tasks": user_tasks,
+            "projects": user_projects,
+            "activity": recent_activity,
             "recent_activity": recent_activity,
+            "productivity": productivity_trend,
+            "productivity_trend": productivity_trend,
+            "app_usage": summary.get("today_apps", []),
+            "site_usage": summary.get("today_sites", []),
             "task_counts": {
                 "total": summary.get("task_count", 0),
                 "completed": summary.get("completedTasksCount", 0)
@@ -1475,38 +1623,168 @@ def get_dashboard_data():
             "today_used": {
                 "apps": summary.get("today_apps", []),
                 "sites": summary.get("today_sites", [])
-            },
-            "productivity_trend": productivity_trend
-        })
+            }
+        }
+        return jsonify(res_data)
     else:
         # Team Lead dashboard
+        t0 = time.perf_counter()
         # 1. Users
-        users = get_users().get_json()
+        users = _unwrap(get_users()) or []
+        t1 = time.perf_counter()
         
         # 2. Recent Activity
-        recent_activity = get_recent_activity().get_json()
+        recent_activity = _unwrap(get_recent_activity()) or []
+        t2 = time.perf_counter()
         
         # 3. Productivity Trend
-        productivity_trend = get_productivity_trend().get_json()
+        orig_args = request.args.copy()
+        from werkzeug.datastructures import MultiDict
+        request.args = MultiDict({k: v for k, v in orig_args.items() if k not in ("user_id", "employee_id")})
+        team_trend = _unwrap(get_productivity_trend()) or []
+        request.args = orig_args
+        personal_trend = _unwrap(get_productivity_trend()) or []
+        t3 = time.perf_counter()
         
         # 4. Assigned Projects
-        assigned_projects = get_assigned_projects(user_id).get_json()
+        assigned_projects = _unwrap(get_assigned_projects(user_id)) or []
+        t4 = time.perf_counter()
         
         # 5. Lead's own summary
-        summary = get_intern_summary(user_id).get_json()
+        summary = _unwrap(get_intern_summary(user_id, dashboard=True)) or {}
+        t5 = time.perf_counter()
         
         # 6. Lead's own status
-        monitoring_status = get_status(user_id).get_json()
+        monitoring_status = _unwrap(get_status(user_id)) or {}
+        t6 = time.perf_counter()
         
         # 7. Team status
-        all_monitoring_statuses = get_all_status().get_json()
+        all_monitoring_statuses = _unwrap(get_all_status()) or []
+        t7 = time.perf_counter()
+
+        # 8. Tasks & Projects
+        project_ids = [(p if isinstance(p, str) else (p.get("id") or str(p.get("_id")))) for p in assigned_projects if p]
+        lead_tasks = [serialize_doc(t) for t in tasks_collection.find({"project_id": {"$in": project_ids}})]
+        t8 = time.perf_counter()
+
+        print(f"[DASHBOARD TL TIMING] Users: {(t1-t0)*1000:.2f}ms | Activity: {(t2-t1)*1000:.2f}ms | Trend: {(t3-t2)*1000:.2f}ms | Projs: {(t4-t3)*1000:.2f}ms | Summary: {(t5-t4)*1000:.2f}ms | Status: {(t6-t5)*1000:.2f}ms | AllStatus: {(t7-t6)*1000:.2f}ms | Tasks: {(t8-t7)*1000:.2f}ms")
         
-        return jsonify({
+        # Do not override summary today used stats with team today stats for team lead dashboard views
+        # (This preserves the Lead's personal metrics in summary and team metrics in summary["team_stats"])
+        pass
+
+        res_data = {
             "users": users,
             "recent_activity": recent_activity,
-            "productivity_trend": productivity_trend,
+            "activity": recent_activity,
+            "productivity_trend": team_trend,
+            "productivity": team_trend,
+            "personal_productivity_trend": personal_trend,
             "assigned_projects": assigned_projects,
+            "projects": assigned_projects,
             "summary": summary,
             "monitoring_status": monitoring_status,
-            "all_monitoring_statuses": all_monitoring_statuses
-        })
+            "monitoring": monitoring_status,
+            "all_monitoring_statuses": all_monitoring_statuses,
+            "tasks": lead_tasks,
+            "app_usage": summary.get("today_apps", []) if summary else [],
+            "site_usage": summary.get("today_sites", []) if summary else []
+        }
+        return jsonify(res_data)
+
+@reports_bp.route("/export-csv", methods=["GET"])
+def export_csv():
+    employee_id = request.args.get("employee_id") or request.args.get("user_id")
+    scope = request.args.get("scope", "all_time")
+    
+    from config.productivity_rules import calculate_productivity
+    
+    if employee_id and employee_id != "all":
+        res = calculate_productivity(employee_id, scope)
+        filename = f"productivity_report_{employee_id}_{scope}.csv"
+    else:
+        # Org-wide CSV
+        all_users = list(users_collection.find({}, {"_id": 1}))
+        summaries = []
+        for u in all_users:
+            res = calculate_productivity(str(u["_id"]), scope)
+            summaries.append(res)
+            
+        combined = {
+            "tracked_minutes": sum(s["tracked_minutes"] for s in summaries),
+            "active_minutes": sum(s["active_minutes"] for s in summaries),
+            "idle_minutes": sum(s["idle_minutes"] for s in summaries),
+            "locked_minutes": sum(s["locked_minutes"] for s in summaries),
+            "productive_minutes": sum(s["productive_minutes"] for s in summaries),
+            "neutral_minutes": sum(s["neutral_minutes"] for s in summaries),
+            "unproductive_minutes": sum(s["unproductive_minutes"] for s in summaries),
+            "efficiency_ratio": sum(s["efficiency_ratio"] for s in summaries) / len(summaries) if summaries else 0.0,
+            "activity_ratio": sum(s["activity_ratio"] for s in summaries) / len(summaries) if summaries else 0.0,
+            "productivity": int(round(sum(s["productivity"] for s in summaries) / len(summaries))) if summaries else 0,
+            "productive_apps": [], "neutral_apps": [], "unproductive_apps": [],
+            "productive_sites": [], "neutral_sites": [], "unproductive_sites": []
+        }
+        
+        # Merge apps/sites durations
+        app_durs = defaultdict(int)
+        site_durs = defaultdict(int)
+        for s in summaries:
+            for app in s["productive_apps"] + s["neutral_apps"] + s["unproductive_apps"]:
+                app_durs[app["name"]] += app["duration"]
+            for site in s["productive_sites"] + s["neutral_sites"] + s["unproductive_sites"]:
+                site_durs[site["domain"]] += site["duration"]
+                
+        from config.productivity_rules import classify_app_by_title_and_name, classify_website_new
+        for name, dur in app_durs.items():
+            cat = classify_app_by_title_and_name(name, "")
+            app_obj = {"name": name, "duration": dur, "percentage": 0, "category": cat}
+            if cat == "productive": combined["productive_apps"].append(app_obj)
+            elif cat == "unproductive": combined["unproductive_apps"].append(app_obj)
+            else: combined["neutral_apps"].append(app_obj)
+            
+        for domain, dur in site_durs.items():
+            cat = classify_website_new(domain, "")
+            site_obj = {"domain": domain, "duration": dur, "percentage": 0, "category": cat}
+            if cat == "productive": combined["productive_sites"].append(site_obj)
+            elif cat == "unproductive": combined["unproductive_sites"].append(site_obj)
+            else: combined["neutral_sites"].append(site_obj)
+            
+        res = combined
+        filename = f"org_productivity_report_{scope}.csv"
+
+    import csv
+    import io
+    from flask import Response
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Headers
+    writer.writerow([
+        "Metric", "Value"
+    ])
+    writer.writerow(["Tracked Time (Minutes)", round(res["tracked_minutes"], 1)])
+    writer.writerow(["Active Time (Minutes)", round(res["active_minutes"], 1)])
+    writer.writerow(["Idle Time (Minutes)", round(res["idle_minutes"], 1)])
+    writer.writerow(["Locked Time (Minutes)", round(res["locked_minutes"], 1)])
+    writer.writerow(["Productive Time (Minutes)", round(res["productive_minutes"], 1)])
+    writer.writerow(["Neutral Time (Minutes)", round(res["neutral_minutes"], 1)])
+    writer.writerow(["Unproductive Time (Minutes)", round(res["unproductive_minutes"], 1)])
+    writer.writerow(["Efficiency Ratio (%)", round(res["efficiency_ratio"] * 100.0, 1)])
+    writer.writerow(["Activity Ratio (%)", round(res["activity_ratio"] * 100.0, 1)])
+    writer.writerow(["Productivity %", res["productivity"]])
+    
+    # Add a blank line and then apps/sites lists
+    writer.writerow([])
+    writer.writerow(["Application / Website", "Duration (Seconds)", "Percentage", "Category"])
+    for app in res["productive_apps"] + res["neutral_apps"] + res["unproductive_apps"]:
+        writer.writerow([app["name"], app["duration"], app["percentage"], app["category"]])
+    for site in res["productive_sites"] + res["neutral_sites"] + res["unproductive_sites"]:
+        writer.writerow([site["domain"], site["duration"], site["percentage"], site["category"]])
+
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-disposition": f"attachment; filename={filename}"}
+    )

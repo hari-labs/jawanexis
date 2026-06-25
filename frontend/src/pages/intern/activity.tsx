@@ -1,4 +1,4 @@
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { PageHeader } from "@/components/page-header"
 import { MockScreenshot } from "@/components/mock-screenshot"
@@ -8,9 +8,13 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Toolti
 import { Clock, Activity, Coffee, Gauge, Calendar, ShieldAlert } from "lucide-react"
 
 function fmt(min: number) {
-  const h = Math.floor(min / 60)
-  const m = min % 60
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
+  const totalMins = Math.round(min)
+  const h = Math.floor(totalMins / 60)
+  const m = totalMins % 60
+  if (h > 0) {
+    return `${h}h ${m}m`
+  }
+  return `${m}m`
 }
 
 function UsageBar({ label, minutes, max, category }: { label: string; minutes: number; max: number; category: string }) {
@@ -42,7 +46,9 @@ export function ActivityPage() {
       try {
         const parsedUser = JSON.parse(storedUserStr)
         setLoading(true)
-        getInternSummary(parsedUser.id, selectedSessionId)
+        const controller = new AbortController()
+        
+        getInternSummary(parsedUser.id, selectedSessionId, { signal: controller.signal })
           .then(data => {
             setSummaryData(data)
             if (data.sessions) {
@@ -50,7 +56,15 @@ export function ActivityPage() {
             }
             setLoading(false)
           })
-          .catch(() => setLoading(false))
+          .catch((err) => {
+            if (err.name !== "AbortError") {
+              setLoading(false)
+            }
+          })
+          
+        return () => {
+          controller.abort()
+        }
       } catch (e) {
         setLoading(false)
       }
@@ -118,6 +132,15 @@ export function ActivityPage() {
     shots: groupedShots[hour]
   }))
 
+  let scopeSuffix = "All Time"
+  if (selectedSessionId === "today") {
+    scopeSuffix = "Today"
+  } else if (selectedSessionId === "week") {
+    scopeSuffix = "Week"
+  } else if (selectedSessionId !== "all") {
+    scopeSuffix = "Selected Session"
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="Activity Dashboard" description="Review apps, web traffic, and captured desktop states." />
@@ -134,6 +157,8 @@ export function ActivityPage() {
           className="h-10 w-full sm:w-80 rounded-lg border border-border bg-card px-3 text-xs font-semibold focus:border-ring outline-none"
         >
           <option value="all">All Sessions (All-Time Cumulative)</option>
+          <option value="today">☀️ Today&apos;s Summary (Cumulative)</option>
+          <option value="week">📅 This Week (Cumulative)</option>
           {sessions.map((sess) => {
             const start = new Date(sess.start_time)
             const dateStr = start.toLocaleDateString()
@@ -160,8 +185,8 @@ export function ActivityPage() {
                 <Clock className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-medium">Tracked Time</p>
-                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.total_work_mins)}</p>
+                <p className="text-xs text-muted-foreground uppercase font-medium">Tracked Time ({scopeSuffix})</p>
+                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.scope_tracked_mins !== undefined ? summaryData.scope_tracked_mins : summaryData.total_work_mins)}</p>
               </div>
             </CardContent>
           </Card>
@@ -171,8 +196,8 @@ export function ActivityPage() {
                 <Activity className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-medium">Active Time</p>
-                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.total_active_mins)}</p>
+                <p className="text-xs text-muted-foreground uppercase font-medium">Active Time ({scopeSuffix})</p>
+                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.scope_active_mins !== undefined ? summaryData.scope_active_mins : summaryData.total_active_mins)}</p>
               </div>
             </CardContent>
           </Card>
@@ -182,8 +207,8 @@ export function ActivityPage() {
                 <Coffee className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-medium">Idle Time</p>
-                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.total_idle_mins)}</p>
+                <p className="text-xs text-muted-foreground uppercase font-medium">Idle Time ({scopeSuffix})</p>
+                <p className="text-lg font-bold mt-0.5">{fmt(summaryData.scope_idle_mins !== undefined ? summaryData.scope_idle_mins : summaryData.total_idle_mins)}</p>
               </div>
             </CardContent>
           </Card>
@@ -193,40 +218,93 @@ export function ActivityPage() {
                 <Gauge className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-medium">Productivity</p>
-                <p className="text-lg font-bold mt-0.5 text-primary">{summaryData.productivity}%</p>
+                <p className="text-xs text-muted-foreground uppercase font-medium">Productivity ({scopeSuffix})</p>
+                <p className="text-lg font-bold mt-0.5 text-primary">{(summaryData.scope_productivity !== undefined ? summaryData.scope_productivity : summaryData.productivity)}%</p>
               </div>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Chart */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Time by application</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={chartData} margin={{ left: -20, right: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-              <XAxis dataKey="name" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
-              <Tooltip
-                cursor={{ fill: "var(--color-muted)" }}
-                contentStyle={{
-                  background: "var(--color-popover)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "var(--radius)",
-                  fontSize: 12,
-                }}
-                formatter={(v: any) => fmt(Number(v))}
-              />
-              <Bar dataKey="minutes" fill="var(--color-chart-1)" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
+      {/* Chart & Performance Details Grid */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Time by application</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={chartData} margin={{ left: -20, right: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+                <XAxis dataKey="name" stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--color-muted-foreground)" fontSize={12} tickLine={false} axisLine={false} />
+                <Tooltip
+                  cursor={{ fill: "var(--color-muted)" }}
+                  contentStyle={{
+                    background: "var(--color-popover)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "var(--radius)",
+                    fontSize: 12,
+                  }}
+                  formatter={(v: any) => fmt(Number(v))}
+                />
+                <Bar dataKey="minutes" fill="var(--color-chart-1)" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {summaryData && (
+          <Card className="flex flex-col">
+            <CardHeader>
+              <CardTitle>Performance details ({scopeSuffix})</CardTitle>
+              <CardDescription>Scope breakdown telemetry metrics</CardDescription>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col justify-center text-xs space-y-2.5 pb-6">
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Tracked Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_tracked_mins || 0}m ({fmt(summaryData.scope_tracked_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Active Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_active_mins || 0}m ({fmt(summaryData.scope_active_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Idle Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_idle_mins || 0}m ({fmt(summaryData.scope_idle_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Locked Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_locked_mins || 0}m ({fmt(summaryData.scope_locked_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Productive Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_productive_mins || 0}m ({fmt(summaryData.scope_productive_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Neutral Time:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_neutral_mins || 0}m ({fmt(summaryData.scope_neutral_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Unproductive Time:</span>
+                <span className="font-semibold text-destructive font-mono">{summaryData.scope_unproductive_mins || 0}m ({fmt(summaryData.scope_unproductive_mins || 0)})</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Efficiency Ratio:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_efficiency || 0}%</span>
+              </div>
+              <div className="flex justify-between border-b border-border/40 pb-1.5">
+                <span className="text-muted-foreground">Activity Ratio:</span>
+                <span className="font-semibold text-foreground font-mono">{summaryData.scope_activity_ratio || 0}%</span>
+              </div>
+              <div className="flex justify-between pt-1">
+                <span className="text-muted-foreground font-medium">Productivity Score:</span>
+                <span className="font-bold text-primary font-mono">{summaryData.scope_productivity || 0}%</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Apps List */}

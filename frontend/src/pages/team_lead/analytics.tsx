@@ -76,12 +76,31 @@ export function TeamAnalytics() {
   }, [])
 
   useEffect(() => {
+    const controller = new AbortController()
     const memberId = selectedMemberId === "all" ? undefined : selectedMemberId
-    getAppUsage(memberId).then(data => setAppUsage(data))
-    getSiteUsage(memberId).then(data => setSiteUsage(data))
+    
+    getAppUsage(memberId, { signal: controller.signal })
+      .then(data => setAppUsage(data))
+      .catch((err) => {
+        if (err.name !== "AbortError") console.error(err)
+      })
+      
+    getSiteUsage(memberId, { signal: controller.signal })
+      .then(data => setSiteUsage(data))
+      .catch((err) => {
+        if (err.name !== "AbortError") console.error(err)
+      })
 
     const targetId = selectedMemberId === "all" ? currentUser.id : selectedMemberId
-    getInternSummary(targetId).then(data => setSummary(data)).catch(() => {})
+    getInternSummary(targetId, undefined, { signal: controller.signal })
+      .then(data => setSummary(data))
+      .catch((err) => {
+        if (err.name !== "AbortError") console.error(err)
+      })
+      
+    return () => {
+      controller.abort()
+    }
   }, [selectedMemberId])
 
   const selectedMember = teamMembers.find((m) => m.id === selectedMemberId)

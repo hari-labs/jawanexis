@@ -131,6 +131,28 @@ def create_project():
         "updated_at": datetime.utcnow().isoformat()
     }
     result = projects_collection.insert_one(project_doc)
+    try:
+        from routes.notifications import create_notification_internal
+        # Notify Team Lead
+        if lead_id:
+            create_notification_internal(
+                lead_id,
+                "New Project Assigned",
+                f"You have been assigned as the Team Lead for project: {project_doc['name']}",
+                "project_assigned"
+            )
+        # Notify Member Interns
+        for mid in member_ids:
+            if str(mid) != str(lead_id):
+                create_notification_internal(
+                    mid,
+                    "New Project Assigned",
+                    f"You have been assigned as a member of project: {project_doc['name']}",
+                    "project_assigned"
+                )
+    except Exception as e:
+        print("Failed to trigger project creation notifications:", e)
+        
     return jsonify({"success": True, "id": str(result.inserted_id)}), 201
 
 @projects_bp.route("/<project_id>", methods=["PATCH", "PUT"])
@@ -151,10 +173,40 @@ def edit_project(project_id):
             
     update_fields["updated_at"] = datetime.utcnow().isoformat()
             
+    old_project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    
     projects_collection.update_one(
         {"_id": ObjectId(project_id)},
         {"$set": update_fields}
     )
+    
+    if old_project:
+        try:
+            from routes.notifications import create_notification_internal
+            # If lead changed
+            new_lead = update_fields.get("lead_id") or old_project.get("lead_id")
+            if "lead_id" in update_fields and str(update_fields["lead_id"]) != str(old_project.get("lead_id")):
+                create_notification_internal(
+                    new_lead,
+                    "New Project Assigned",
+                    f"You have been assigned as the Team Lead for project: {old_project.get('name')}",
+                    "project_assigned"
+                )
+            # If member_ids changed
+            if "member_ids" in update_fields:
+                old_mids = {str(m) for m in old_project.get("member_ids", [])}
+                new_mids = {str(m) for m in update_fields["member_ids"]}
+                added_mids = new_mids - old_mids
+                for mid in added_mids:
+                    create_notification_internal(
+                        mid,
+                        "New Project Assigned",
+                        f"You have been assigned as a member of project: {old_project.get('name')}",
+                        "project_assigned"
+                    )
+        except Exception as e:
+            print("Failed to trigger project update notifications:", e)
+
     return jsonify({"success": True, "message": "Project updated"})
 
 @projects_bp.route("/<project_id>", methods=["DELETE"])

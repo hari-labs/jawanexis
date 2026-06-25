@@ -76,16 +76,10 @@ def get_teams_overview():
                 user = users_collection.find_one({"_id": mid})
                 
             if user:
-                prod = user.get("productivity", 0)
-                hours = user.get("workHours", 0)
-                try:
-                    prod = float(prod)
-                except (ValueError, TypeError):
-                    prod = 0.0
-                try:
-                    hours = float(hours)
-                except (ValueError, TypeError):
-                    hours = 0.0
+                from config.productivity_rules import calculate_productivity
+                res = calculate_productivity(str(user["_id"]), "all_time")
+                prod = float(res["productivity"])
+                hours = round(res["active_minutes"] / 60.0, 1)
                     
                 total_productivity += prod
                 total_work_hours += hours

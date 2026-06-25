@@ -51,7 +51,12 @@ export function Reports() {
   return (
     <div>
       <PageHeader title="Reports" description="Aggregated analytics across your intern program.">
-        <Button variant="outline">
+        <Button 
+          variant="outline"
+          onClick={() => {
+            window.open("http://localhost:5000/reports/export-csv?scope=all_time", "_blank")
+          }}
+        >
           <Download className="h-4 w-4" />
           Export CSV
         </Button>

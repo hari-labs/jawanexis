@@ -1,11 +1,32 @@
+import { useEffect, useState } from "react"
 import { useNavigate, Link } from "react-router-dom"
 import { Zap, Mail, Lock, ArrowRight, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { login } from "@/services/api"
+import { login, getPublicStats } from "@/services/api"
 
 export function Login({ role }: { role: "admin" | "intern" }) {
   const navigate = useNavigate()
   const isAdmin = role === "admin"
+
+  const [stats, setStats] = useState({
+    registered_interns: 0,
+    active_users: 0,
+    projects: 0,
+    average_productivity: 0,
+    hours_tracked: 0,
+    screenshots_captured: 0,
+    today_active_monitoring: 0
+  })
+
+  useEffect(() => {
+    getPublicStats()
+      .then(data => {
+        if (data && !data.error) {
+          setStats(data)
+        }
+      })
+      .catch(err => console.error("Error loading public stats:", err))
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -136,14 +157,17 @@ export function Login({ role }: { role: "admin" | "intern" }) {
             guesswork.
           </p>
 
-          <div className="mt-10 grid grid-cols-3 gap-4">
+          <div className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3">
             {[
-              { v: "128", l: "Interns" },
-              { v: "94%", l: "Avg uptime" },
-              { v: "12k", l: "Hours tracked" },
+              { v: String(stats.active_users), l: "Active Users" },
+              { v: String(stats.registered_interns), l: "Registered Interns" },
+              { v: String(stats.projects), l: "Projects" },
+              { v: `${stats.average_productivity}%`, l: "Avg Productivity" },
+              { v: `${stats.hours_tracked}h`, l: "Hours Tracked" },
+              { v: String(stats.screenshots_captured), l: "Screenshots" },
             ].map((s) => (
               <div key={s.l} className="rounded-xl bg-white/10 p-4">
-                <p className="text-2xl font-semibold tabular-nums">{s.v}</p>
+                <p className="text-xl font-semibold tabular-nums">{s.v}</p>
                 <p className="text-xs opacity-80">{s.l}</p>
               </div>
             ))}
