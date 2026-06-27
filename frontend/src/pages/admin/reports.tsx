@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/page-header"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getAppUsage, getSiteUsage, categoryColor, getProductivityTrend, getWorkTimeTrend } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 
 
 const tabs = [
@@ -54,7 +55,7 @@ export function Reports() {
         <Button 
           variant="outline"
           onClick={() => {
-            window.open("http://localhost:5000/reports/export-csv?scope=all_time", "_blank")
+            window.open("${BASE_URL}/reports/export-csv?scope=all_time", "_blank")
           }}
         >
           <Download className="h-4 w-4" />

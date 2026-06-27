@@ -1,3 +1,4 @@
+import { BASE_URL } from "@/services/api";
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import {
@@ -299,7 +300,7 @@ export function AdminDashboard() {
                     <p className="text-muted-foreground truncate">By {ev.user_name || "Intern"} ({ev.project_name || "Project"})</p>
                     {ev.file_path && (
                       <a
-                        href={`http://localhost:5000/${ev.file_path}`}
+                        href={`${BASE_URL}/${ev.file_path}`}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-0.5 text-[10px] font-bold text-primary hover:underline mt-0.5"

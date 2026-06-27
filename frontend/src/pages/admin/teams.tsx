@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { getTeamOverview, getAllEvidence } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
@@ -144,7 +145,7 @@ export function TeamOverview() {
                       <td className="py-3 px-4">
                         {ev.file_path ? (
                           <a
-                            href={`http://localhost:5000/${ev.file_path}`}
+                            href={`${BASE_URL}/${ev.file_path}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-primary hover:underline text-xs"

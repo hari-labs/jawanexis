@@ -1,3 +1,4 @@
+import { BASE_URL } from "@/services/api";
 import { useEffect, useState, useRef } from "react"
 import { Link } from "react-router-dom"
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts"
@@ -753,7 +754,7 @@ export function TeamLeadDashboard() {
                                 <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-card">
                                   {shot.cloudinary_url || shot.file_path ? (
                                     <img
-                                      src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                                      src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                                       alt={shot.app}
                                       className="h-full w-full object-cover"
                                     />
@@ -784,4 +785,3 @@ export function TeamLeadDashboard() {
     </div>
   )
 }
-

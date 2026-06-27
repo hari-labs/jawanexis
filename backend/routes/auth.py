@@ -54,7 +54,7 @@ def login():
                         pass
                 config_data["email"] = user["email"]
                 config_data["user_id"] = str(user["_id"])
-                config_data["backend_url"] = "http://127.0.0.1:5000"
+                config_data["backend_url"] = os.getenv("BACKEND_URL", "http://127.0.0.1:5000")
                 config_data["poll_interval_seconds"] = 5
                 with open(config_file, "w") as f:
                     json.dump(config_data, f, indent=2)

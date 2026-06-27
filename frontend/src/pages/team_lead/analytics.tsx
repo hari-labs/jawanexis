@@ -20,6 +20,7 @@ import { Avatar } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { StatCard } from "@/components/stat-card"
 import { getAppUsage, getSiteUsage, categoryColor, getProductivityTrend, getWorkTimeTrend, getUsers, getAssignedProjects, getInternSummary, getScreenshots } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 
 const tabs = [
   { id: "apps", label: "Application usage", icon: AppWindow },
@@ -378,7 +379,7 @@ function ScreenshotsReport({ memberId, teamMembers }: { memberId?: string; teamM
                   >
                     <div className="relative aspect-video">
                       <img
-                        src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                        src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                         alt={shot.app}
                         className="h-full w-full object-cover"
                       />
@@ -432,7 +433,7 @@ function ScreenshotsReport({ memberId, teamMembers }: { memberId?: string; teamM
             </div>
             <div className="aspect-video">
               <img
-                  src={preview.cloudinary_url || `http://localhost:5000/${preview.file_path}`}
+                  src={preview.cloudinary_url || `${BASE_URL}/${preview.file_path}`}
                   alt={preview.app}
                   className="h-full w-full object-cover"
               />

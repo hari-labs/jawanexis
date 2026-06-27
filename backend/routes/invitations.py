@@ -5,6 +5,7 @@ from bson import ObjectId
 from datetime import datetime
 from werkzeug.security import generate_password_hash
 from utils.serializer import serialize_doc
+import os
 
 invitations_bp = Blueprint(
     "invitations",
@@ -61,7 +62,8 @@ def create_invitation():
     }
 
     # Generate activation link
-    link = f"http://localhost:5173/activate?token={token}"
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    link = f"{frontend_url}/activate?token={token}"
     
     # Send email automatically via mailer
     from utils.mailer import send_invitation_email
@@ -121,7 +123,8 @@ def resend_invitation():
 
     # Renew the expiration time
     created_at_now = datetime.utcnow().isoformat()
-    link = f"http://localhost:5173/activate?token={token}"
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    link = f"{frontend_url}/activate?token={token}"
 
     from utils.mailer import send_invitation_email
     success, err_msg = send_invitation_email(invitation["email"], invitation["role"], link)

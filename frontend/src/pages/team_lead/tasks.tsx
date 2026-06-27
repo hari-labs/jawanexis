@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { getUsers, createTask, getAssignedProjects, reviewTaskEvidence, getAllTasks } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -165,7 +166,7 @@ export function TeamLeadTasks() {
                       <p className="italic text-foreground">{t.evidence.notes || "No notes provided"}</p>
                       {t.evidence.file_path ? (
                         <a
-                          href={`http://localhost:5000/${t.evidence.file_path}`}
+                          href={`${BASE_URL}/${t.evidence.file_path}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-primary font-semibold hover:underline mt-1"

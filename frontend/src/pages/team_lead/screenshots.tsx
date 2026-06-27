@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
 import { getUsers, getScreenshots, getAssignedProjects } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 
 interface Screenshot {
     id: string
@@ -180,7 +181,7 @@ export function TeamScreenshots() {
                 >
                   <div className="relative aspect-video">
                     <img
-                      src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                      src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                       alt={shot.app}
                       className="h-full w-full object-cover"
                     />
@@ -249,7 +250,7 @@ export function TeamScreenshots() {
             </div>
             <div className="aspect-video">
               <img
-                  src={preview.cloudinary_url || `http://localhost:5000/${preview.file_path}`}
+                  src={preview.cloudinary_url || `${BASE_URL}/${preview.file_path}`}
                   alt={preview.app}
                   className="h-full w-full object-cover"
               />

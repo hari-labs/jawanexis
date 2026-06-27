@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header"
 import { MockScreenshot } from "@/components/mock-screenshot"
 import { useState, useEffect } from "react"
 import { getInternSummary, categoryColor } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts"
 import { Clock, Activity, Coffee, Gauge, Calendar, ShieldAlert } from "lucide-react"
 
@@ -353,7 +354,7 @@ export function ActivityPage() {
                     <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-card">
                       {shot.cloudinary_url || shot.file_path ? (
                         <img
-                          src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                          src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                           alt={shot.app}
                           className="h-full w-full object-cover"
                         />

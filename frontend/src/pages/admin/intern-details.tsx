@@ -44,6 +44,7 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "@/components/status-badge"
 import { ProductivityRing } from "@/components/productivity-ring"
 import { getInternSummary, getRecentActivity, getProductivityTrend, createTask, getUserTasks } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 import { Badge } from "@/components/ui/badge"
 
 export function InternDetails() {
@@ -709,7 +710,7 @@ export function InternDetails() {
                         >
                           <div className="relative aspect-video">
                             <img
-                              src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                              src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                               alt={shot.app_name}
                               className="h-full w-full object-cover"
                             />
@@ -894,7 +895,7 @@ export function InternDetails() {
                         >
                           <div className="relative aspect-video">
                             <img
-                              src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                              src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                               alt={shot.app_name}
                               className="h-full w-full object-cover"
                             />
@@ -1073,7 +1074,7 @@ export function InternDetails() {
             </div>
             <div className="aspect-video">
               <img
-                  src={previewScreenshot.cloudinary_url || `http://localhost:5000/${previewScreenshot.file_path}`}
+                  src={previewScreenshot.cloudinary_url || `${BASE_URL}/${previewScreenshot.file_path}`}
                   alt={previewScreenshot.app_name}
                   className="h-full w-full object-cover"
               />

@@ -1,3 +1,4 @@
+import { BASE_URL } from "@/services/api";
 import { useEffect, useState, useRef } from "react"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -1062,7 +1063,7 @@ export function ProjectsPage() {
                                 <span className="truncate text-xs">{ev.file_path.split("/").pop()}</span>
                               </span>
                               <a
-                                href={`http://localhost:5000/${ev.file_path}`}
+                                href={`${BASE_URL}/${ev.file_path}`}
                                 download
                                 target="_blank"
                                 rel="noreferrer"

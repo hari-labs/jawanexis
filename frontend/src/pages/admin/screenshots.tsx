@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
 import { MockScreenshot } from "@/components/mock-screenshot"
 import { getUsers, getScreenshots } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 
 interface Screenshot {
     id: string
@@ -151,7 +152,7 @@ export function Screenshots() {
                 >
                   <div className="relative aspect-video">
                     <img
-                      src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                      src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
 
                       alt={shot.app}
                       
@@ -219,7 +220,7 @@ export function Screenshots() {
             </div>
             <div className="aspect-video">
               <img
-                  src={preview.cloudinary_url || `http://localhost:5000/${preview.file_path}`}
+                  src={preview.cloudinary_url || `${BASE_URL}/${preview.file_path}`}
 
                   alt={preview.app}
 

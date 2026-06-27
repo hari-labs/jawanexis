@@ -15,6 +15,7 @@ frontend/.v0-trash/
 frontend/.vercel/
 
 # Environment variables
+.env
 frontend/.env*.local
 
 
@@ -23,14 +24,13 @@ frontend/.env*.local
 # ------------------------
 
 backend/venv/
-backend/__pycache__/
-
-backend/*.pyc
-backend/*.pyo
-backend/*.pyd
+**/__pycache__/
+**/*.py[cod]
 
 backend/.env
-
+backend/screenshots/*
+!backend/screenshots/.gitkeep
+backend/evidence/
 
 # ------------------------
 # OS files

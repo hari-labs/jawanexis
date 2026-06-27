@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { logoutUser } from "@/services/api"
+import { BASE_URL } from "@/services/api";
 import {
   LayoutDashboard,
   Users,
@@ -68,7 +69,7 @@ export function AppLayout({ role }: { role: Role }) {
       const parsedUser = JSON.parse(storedUserStr)
       
       // Perform live re-validation of user role and activation status
-      fetch(`http://localhost:5000/auth/me/${parsedUser.id}`)
+      fetch(`${BASE_URL}/auth/me/${parsedUser.id}`)
         .then(res => res.json())
         .then(data => {
           if (data.success && data.user) {

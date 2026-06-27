@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge"
-import type { Status } from "@/data/mock"
+import type { Status } from "@/types"
 
 const map: Record<Status, { label: string; variant: "success" | "warning" | "neutral"; dot: string }> = {
   active: { label: "Active", variant: "success", dot: "oklch(0.6 0.16 150)" },

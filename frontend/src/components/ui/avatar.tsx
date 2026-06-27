@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { getInitials } from "@/data/mock"
+import { getInitials } from "@/lib/utils"
 
 export function Avatar({
   name,

@@ -1,3 +1,4 @@
+import { BASE_URL } from "@/services/api";
 import { useEffect, useState } from "react"
 import {
   getUsers,
@@ -694,7 +695,7 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                             <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-card">
                                {shot.cloudinary_url || shot.file_path ? (
                                 <img
-                                  src={shot.cloudinary_url || `http://localhost:5000/${shot.file_path}`}
+                                  src={shot.cloudinary_url || `${BASE_URL}/${shot.file_path}`}
                                   alt={shot.app}
                                   className="h-full w-full object-cover"
                                 />
@@ -744,7 +745,7 @@ function UserAnalyticsView({ user, summary, projects, tasks, evidence, allUsers,
                           <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/20">
                             <span>Submitted: {ev.submitted_at ? new Date(ev.submitted_at).toLocaleString() : "-"}</span>
                             {ev.file_path && (
-                              <a href={`http://localhost:5000/${ev.file_path}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-bold text-primary hover:underline">
+                              <a href={`${BASE_URL}/${ev.file_path}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-bold text-primary hover:underline">
                                 <Download className="h-3 w-3" /> Download Deliverable
                               </a>
                             )}
