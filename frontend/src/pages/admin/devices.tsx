@@ -108,7 +108,7 @@ export function DevicesPage() {
                   <Monitor className="h-5 w-5 text-muted-foreground" />
                   {device.hostname}
                 </CardTitle>
-                <Badge variant={device.status === 'approved' ? 'default' : 'secondary'} className={device.status === 'approved' ? 'bg-green-500/10 text-green-500 hover:bg-green-500/20' : 'bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20'}>
+                <Badge variant={device.status === 'approved' ? 'default' : 'warning'} className={device.status === 'approved' ? 'bg-green-500/10 text-green-500 hover:bg-green-500/20' : 'bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20'}>
                   {device.status.toUpperCase()}
                 </Badge>
               </div>
