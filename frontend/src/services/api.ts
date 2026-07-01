@@ -1,19 +1,21 @@
 export type Status = "active" | "paused" | "offline"
 
-export const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000"
+export const BASE_URL = (import.meta as any).env.VITE_API_URL || "http://127.0.0.1:5000"
 
-function getUserId() {
+export function getUserId() {
     const storedUserStr = localStorage.getItem("user")
+
     if (storedUserStr) {
         try {
             const parsed = JSON.parse(storedUserStr)
             return parsed?.id || ""
-        } catch (e) {}
+        } catch {}
     }
+
     return ""
 }
 
-async function authFetch(url: string, options: RequestInit = {}) {
+export async function authFetch(url: string, options: RequestInit = {}) {
     const userId = getUserId()
     const headers = { ...(options.headers || {}) } as Record<string, string>
     if (userId) {

@@ -24,6 +24,7 @@ import { TeamLeadTasks } from "@/pages/team_lead/tasks"
 import { TeamAnalytics } from "@/pages/team_lead/analytics"
 import { TeamScreenshots } from "@/pages/team_lead/screenshots"
 import { TeamOverview } from "@/pages/admin/teams"
+import { DevicesPage } from "@/pages/admin/devices"
 
 export default function App() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/admin/interns" element={<InternManagement />} />
         <Route path="/admin/interns/:id" element={<InternDetails />} />
         <Route path="/admin/interns/invite" element={<InviteIntern />} />
+        <Route path="/admin/devices" element={<DevicesPage />} />
       </Route>
 
       {/* Team Lead routes */}

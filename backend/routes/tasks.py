@@ -25,6 +25,68 @@ def get_caller_user():
         pass
     return None
 
+def _hydrate_tasks(task_docs, resolve_evidence=False, evidence_user_id=None):
+    if not task_docs:
+        return []
+        
+    user_ids = set()
+    project_ids = set()
+    for task in task_docs:
+        if task.get("assigned_to"):
+            user_ids.add(str(task["assigned_to"]))
+        if task.get("assigned_by"):
+            user_ids.add(str(task["assigned_by"]))
+        if task.get("project_id"):
+            project_ids.add(str(task["project_id"]))
+            
+    user_query_ids = []
+    for uid in user_ids:
+        if ObjectId.is_valid(uid):
+            user_query_ids.append(ObjectId(uid))
+        user_query_ids.append(uid)
+        
+    project_query_ids = []
+    for pid in project_ids:
+        if ObjectId.is_valid(pid):
+            project_query_ids.append(ObjectId(pid))
+        project_query_ids.append(pid)
+        
+    users_lookup = {}
+    if user_query_ids:
+        for u in users_collection.find({"_id": {"$in": user_query_ids}}):
+            users_lookup[str(u["_id"])] = u.get("name")
+            
+    projects_lookup = {}
+    if project_query_ids:
+        for p in projects_collection.find({"_id": {"$in": project_query_ids}}):
+            projects_lookup[str(p["_id"])] = p.get("name")
+            
+    hydrated = []
+    for task in task_docs:
+        task = serialize_doc(task)
+        assigned_to = str(task.get("assigned_to", ""))
+        if assigned_to in users_lookup:
+            task["assigned_to_name"] = users_lookup[assigned_to]
+            
+        assigned_by = str(task.get("assigned_by", ""))
+        if assigned_by in users_lookup:
+            task["assigned_by_name"] = users_lookup[assigned_by]
+            
+        p_id = str(task.get("project_id", ""))
+        if p_id in projects_lookup:
+            task["project_name"] = projects_lookup[p_id]
+            
+        if resolve_evidence:
+            ev_query = {"task_id": ObjectId(task["_id"]) if ObjectId.is_valid(task["_id"]) else task["_id"]}
+            if evidence_user_id:
+                ev_query["uploaded_by"] = {"$in": [evidence_user_id, ObjectId(evidence_user_id) if ObjectId.is_valid(evidence_user_id) else evidence_user_id]}
+            evidence = task_evidence_collection.find_one(ev_query, sort=[("submitted_at", -1)])
+            if evidence:
+                task["evidence"] = serialize_doc(evidence)
+                
+        hydrated.append(task)
+    return hydrated
+
 @tasks_bp.route("/", methods=["GET"])
 def get_all_tasks_global():
     caller = get_caller_user()
@@ -51,30 +113,8 @@ def get_all_tasks_global():
         if proj_oids:
             query = {"$or": [{"project_id": {"$in": led_project_ids}}, {"project_id": {"$in": proj_oids}}]}
             
-    tasks = []
-    for task in tasks_collection.find(query):
-        task = serialize_doc(task)
-        
-        # Resolve names
-        assigned_to = task.get("assigned_to")
-        if assigned_to:
-            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
-            if u:
-                task["assigned_to_name"] = u.get("name")
-                
-        assigned_by = task.get("assigned_by")
-        if assigned_by:
-            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
-            if u:
-                task["assigned_by_name"] = u.get("name")
-                
-        p_id = task.get("project_id")
-        if p_id:
-            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
-            if p:
-                task["project_name"] = p.get("name")
-                
-        tasks.append(task)
+    task_docs = list(tasks_collection.find(query))
+    tasks = _hydrate_tasks(task_docs)
     return jsonify(tasks)
 
 @tasks_bp.route("/project/<project_id>", methods=["GET"])
@@ -105,37 +145,15 @@ def get_project_tasks(project_id):
     if ObjectId.is_valid(project_id):
         query = {"$or": [{"project_id": project_id}, {"project_id": ObjectId(project_id)}]}
         
-    tasks = []
-    for task in tasks_collection.find(query):
-        task = serialize_doc(task)
-        
-        # Interns may only view tasks assigned to themselves
-        assigned_to_str = str(task.get("assigned_to", ""))
+    raw_docs = list(tasks_collection.find(query))
+    filtered_docs = []
+    for t in raw_docs:
+        assigned_to_str = str(t.get("assigned_to", ""))
         if caller_role == "intern" and assigned_to_str != caller_id:
             continue
-            
-        # Populate assignee info
-        assigned_to = task.get("assigned_to")
-        if assigned_to:
-            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
-            if u:
-                task["assigned_to_name"] = u.get("name")
-                
-        assigned_by = task.get("assigned_by")
-        if assigned_by:
-            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
-            if u:
-                task["assigned_by_name"] = u.get("name")
-
-        # Resolve evidence details
-        evidence = task_evidence_collection.find_one(
-            {"task_id": ObjectId(task["_id"])},
-            sort=[("submitted_at", -1)]
-        )
-        if evidence:
-            task["evidence"] = serialize_doc(evidence)
-
-        tasks.append(task)
+        filtered_docs.append(t)
+        
+    tasks = _hydrate_tasks(filtered_docs, resolve_evidence=True)
     return jsonify(tasks)
 
 @tasks_bp.route("/", methods=["POST"])
@@ -562,39 +580,8 @@ def get_user_tasks(user_id):
     if ObjectId.is_valid(user_id):
         query = {"$or": [{"assigned_to": user_id}, {"assigned_to": ObjectId(user_id)}]}
         
-    tasks = []
-    for task in tasks_collection.find(query):
-        task = serialize_doc(task)
-        
-        assigned_to = task.get("assigned_to")
-        if assigned_to:
-            u = users_collection.find_one({"_id": ObjectId(assigned_to) if ObjectId.is_valid(assigned_to) else assigned_to})
-            if u:
-                task["assigned_to_name"] = u.get("name")
-                
-        assigned_by = task.get("assigned_by")
-        if assigned_by:
-            u = users_collection.find_one({"_id": ObjectId(assigned_by) if ObjectId.is_valid(assigned_by) else assigned_by})
-            if u:
-                task["assigned_by_name"] = u.get("name")
-                
-        p_id = task.get("project_id")
-        if p_id:
-            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
-            if p:
-                task["project_name"] = p.get("name")
-                
-        evidence = task_evidence_collection.find_one(
-            {
-                "task_id": ObjectId(task["_id"]) if ObjectId.is_valid(task["_id"]) else task["_id"],
-                "uploaded_by": {"$in": [user_id, ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id]}
-            },
-            sort=[("submitted_at", -1)]
-        )
-        if evidence:
-            task["evidence"] = serialize_doc(evidence)
-            
-        tasks.append(task)
+    task_docs = list(tasks_collection.find(query))
+    tasks = _hydrate_tasks(task_docs, resolve_evidence=True, evidence_user_id=user_id)
     return jsonify(tasks)
 
 @tasks_bp.route("/evidence", methods=["GET"])

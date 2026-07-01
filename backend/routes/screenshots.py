@@ -43,6 +43,7 @@ def create_screenshot():
             "session_id": request.form.get("session_id"),
             "captured_at": request.form.get("captured_at"),
             "file_path": f"screenshots/{filename}",
+            "file_basename": filename,
             "user_id": request.form.get("user_id") or request.form.get("employee_id")
         }
 

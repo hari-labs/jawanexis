@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from database.mongodb import users_collection, sessions_collection, monitoring_states_collection
+from database.mongodb import users_collection, sessions_collection, monitoring_states_collection, devices_collection
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -130,6 +130,42 @@ def calculate_elapsed_seconds(state_doc):
     if state == "PAUSED":
         return max(0, accumulated)
     return max(0, accumulated)
+
+@monitoring_bp.route("/agent/register", methods=["POST"])
+def register_agent():
+    data = request.json or {}
+    device_uuid = data.get("device_uuid")
+    hostname = data.get("hostname", "Unknown")
+    os_version = data.get("os", "Unknown")
+    
+    if not device_uuid:
+        return jsonify({"success": False, "message": "Missing device_uuid"}), 400
+        
+    device = devices_collection.find_one({"device_uuid": device_uuid})
+    now_str = _utcnow().isoformat()
+    
+    if not device:
+        device = {
+            "device_uuid": device_uuid,
+            "hostname": hostname,
+            "os_version": os_version,
+            "status": "pending",
+            "assigned_user_id": None,
+            "registered_at": now_str,
+            "last_seen_at": now_str
+        }
+        devices_collection.insert_one(device)
+    else:
+        devices_collection.update_one(
+            {"_id": device["_id"]},
+            {"$set": {"last_seen_at": now_str, "hostname": hostname, "os_version": os_version}}
+        )
+        
+    return jsonify({
+        "success": True, 
+        "status": device.get("status", "pending"),
+        "message": "Device registered successfully."
+    })
 
 @monitoring_bp.route("/command", methods=["POST"])
 def send_command():
@@ -352,15 +388,18 @@ def agent_poll():
     3. Returns any pending_command to the agent
     4. Clears pending_command AFTER returning it (so agent receives it exactly once)
     """
-    email = request.args.get("email")
-    if not email:
-        return jsonify({"success": False, "message": "email parameter required"}), 400
+    device_uuid = request.args.get("device_uuid")
+    if not device_uuid:
+        return jsonify({"success": False, "message": "device_uuid parameter required"}), 400
         
-    user = users_collection.find_one({"email": email})
-    if not user:
-        return jsonify({"success": False, "message": "User not found"}), 404
+    device = devices_collection.find_one({"device_uuid": device_uuid})
+    if not device:
+        return jsonify({"success": False, "message": "Device not found"}), 404
         
-    user_id = str(user["_id"])
+    if device.get("status") != "approved" or not device.get("assigned_user_id"):
+        return jsonify({"success": True, "status": device.get("status", "pending"), "command": None})
+        
+    user_id = str(device["assigned_user_id"])
     now_str = _utcnow().isoformat()
     
     agent_state = request.args.get("state", "IDLE")  # IDLE, ACTIVE, PAUSED, ENDED
@@ -381,7 +420,7 @@ def agent_poll():
             "accumulated_seconds": 0
         }
         monitoring_states_collection.insert_one(state_doc)
-        print(f"[AGENT-POLL] New state created for {email}")
+        print(f"[AGENT-POLL] New state created for {device_uuid}")
     else:
         pending = state_doc.get("pending_command")
 
@@ -395,7 +434,7 @@ def agent_poll():
         if pending:
             # There's a command queued — keep the transition state visible in DB
             # Don't overwrite the current_state since it's in a transition
-            print(f"[AGENT-POLL] Pending command for {email}: {pending}")
+            print(f"[AGENT-POLL] Pending command for {device_uuid}: {pending}")
         else:
             # No command queued — reflect agent's actual local state
             state_map = {
@@ -407,7 +446,7 @@ def agent_poll():
             mapped = state_map.get(agent_state, "IDLE")
             update_fields["current_state"] = mapped
             state_doc["current_state"] = mapped
-            print(f"[AGENT-POLL] {email} state: agent={agent_state} -> backend={mapped}")
+            print(f"[AGENT-POLL] {device_uuid} state: agent={agent_state} -> backend={mapped}")
 
         monitoring_states_collection.update_one(
             {"_id": state_doc["_id"]},
@@ -424,15 +463,16 @@ def agent_poll():
             {"_id": state_doc["_id"]},
             {"$set": {"pending_command": None}}
         )
-        print(f"[AGENT-POLL] Dispatching command {command} to agent {email}, session={session_id}")
+        print(f"[AGENT-POLL] Dispatching command {command} to agent {device_uuid}, session={session_id}")
         
-    return jsonify({
+    res_data = {
         "success": True,
-        "user_id": user_id,
+        "status": "approved",
         "current_state": state_doc.get("current_state", "IDLE"),
         "current_session_id": session_id,
         "command": command
-    })
+    }
+    return jsonify(res_data)
 
 @monitoring_bp.route("/agent/confirm", methods=["POST"])
 def agent_confirm():
@@ -441,17 +481,17 @@ def agent_confirm():
     This prevents the stuck STARTING state when the agent processes a command.
     """
     data = request.json or {}
-    email = data.get("email")
+    device_uuid = data.get("device_uuid")
     confirmed_state = data.get("state")  # RUNNING, PAUSED, STOPPED, IDLE
     
-    if not email or not confirmed_state:
-        return jsonify({"success": False, "message": "email and state required"}), 400
+    if not device_uuid or not confirmed_state:
+        return jsonify({"success": False, "message": "device_uuid and state required"}), 400
 
-    user = users_collection.find_one({"email": email})
-    if not user:
-        return jsonify({"success": False, "message": "User not found"}), 404
+    device = devices_collection.find_one({"device_uuid": device_uuid})
+    if not device or device.get("status") != "approved" or not device.get("assigned_user_id"):
+        return jsonify({"success": False, "message": "Device not approved"}), 403
 
-    user_id = str(user["_id"])
+    user_id = str(device["assigned_user_id"])
     now_str = _utcnow().isoformat()
 
     # Map agent-side confirmed states to backend states
@@ -486,21 +526,21 @@ def agent_confirm():
         {"$set": update_fields},
         upsert=True
     )
-    print(f"[AGENT-CONFIRM] {email} confirmed state: {confirmed_state} -> {backend_state}")
+    print(f"[AGENT-CONFIRM] {device_uuid} confirmed state: {confirmed_state} -> {backend_state}")
     return jsonify({"success": True, "confirmed_state": backend_state})
 
 @monitoring_bp.route("/agent/heartbeat", methods=["POST"])
 def agent_heartbeat():
     data = request.json or {}
-    email = data.get("email")
-    if not email:
-        return jsonify({"success": False, "message": "email is required"}), 400
+    device_uuid = data.get("device_uuid")
+    if not device_uuid:
+        return jsonify({"success": False, "message": "device_uuid is required"}), 400
         
-    user = users_collection.find_one({"email": email})
-    if not user:
-        return jsonify({"success": False, "message": "User not found"}), 404
+    device = devices_collection.find_one({"device_uuid": device_uuid})
+    if not device or device.get("status") != "approved" or not device.get("assigned_user_id"):
+        return jsonify({"success": False, "message": "Device not approved"}), 403
         
-    user_id = str(user["_id"])
+    user_id = str(device["assigned_user_id"])
     now_str = _utcnow().isoformat()
     
     monitoring_states_collection.update_one(
@@ -511,4 +551,62 @@ def agent_heartbeat():
         }},
         upsert=True
     )
+    return jsonify({"success": True})
+
+@monitoring_bp.route("/devices", methods=["GET"])
+def get_devices():
+    caller = get_caller_user()
+    if not caller or caller.get("role") != "admin":
+        return jsonify({"success": False, "message": "Unauthorized"}), 403
+        
+    devices = list(devices_collection.find({}))
+    for d in devices:
+        d["_id"] = str(d["_id"])
+        
+        # Hydrate with assigned user email/name if assigned
+        assigned_user_id = d.get("assigned_user_id")
+        if assigned_user_id:
+            user = users_collection.find_one({"_id": ObjectId(assigned_user_id) if ObjectId.is_valid(assigned_user_id) else assigned_user_id})
+            if user:
+                d["assigned_user_email"] = user.get("email")
+                d["assigned_user_name"] = user.get("name")
+                
+    return jsonify({"success": True, "devices": devices})
+
+@monitoring_bp.route("/devices/<device_uuid>/assign", methods=["POST"])
+def assign_device(device_uuid):
+    caller = get_caller_user()
+    if not caller or caller.get("role") != "admin":
+        return jsonify({"success": False, "message": "Unauthorized"}), 403
+        
+    data = request.json or {}
+    user_id = data.get("user_id")
+    
+    device = devices_collection.find_one({"device_uuid": device_uuid})
+    if not device:
+        return jsonify({"success": False, "message": "Device not found"}), 404
+        
+    if user_id:
+        # Assign user
+        user = users_collection.find_one({"_id": ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id})
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+            
+        devices_collection.update_one(
+            {"device_uuid": device_uuid},
+            {"$set": {
+                "assigned_user_id": str(user["_id"]),
+                "status": "approved"
+            }}
+        )
+    else:
+        # Unassign user
+        devices_collection.update_one(
+            {"device_uuid": device_uuid},
+            {"$set": {
+                "assigned_user_id": None,
+                "status": "pending"
+            }}
+        )
+        
     return jsonify({"success": True})

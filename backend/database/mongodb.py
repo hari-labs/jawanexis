@@ -6,8 +6,6 @@ load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
-print(MONGO_URI)
-print(DB_NAME)
 client = MongoClient(MONGO_URI)
 
 db = client[DB_NAME]
@@ -28,6 +26,7 @@ project_members_collection = db["project_members"]
 task_evidence_collection = db["task_evidence"]
 monitoring_states_collection = db["monitoring_states"]
 daily_summaries_collection = db["daily_summaries"]
+devices_collection = db["devices"]
 
 # ── Automatically Create Indexes for Dashboard Queries ──────────────────
 import threading
@@ -86,6 +85,7 @@ def create_indexes_async():
         _ensure_index(screenshots_collection, "timestamp")
         _ensure_index(screenshots_collection, "user_id")
         _ensure_index(screenshots_collection, "captured_at")
+        _ensure_index(screenshots_collection, "file_basename")
         _ensure_index(screenshots_collection, [("employee_id", 1), ("timestamp", -1)])
         _ensure_index(screenshots_collection, [("user_id", 1), ("captured_at", -1)])
 
@@ -113,6 +113,12 @@ def create_indexes_async():
 
         # daily_summaries
         _ensure_index(daily_summaries_collection, [("user_id", 1), ("date", 1)], unique=True)
+
+        # devices
+        _ensure_index(devices_collection, "device_uuid", unique=True)
+        
+        # monitoring_states
+        _ensure_index(monitoring_states_collection, "user_id")
 
     except Exception as index_err:
         print("Error creating indexes:", index_err)

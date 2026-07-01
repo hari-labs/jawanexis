@@ -20,6 +20,7 @@ import {
   FolderKanban,
   UserCheck,
   LogOut,
+  Monitor,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/ui/avatar"
@@ -31,6 +32,7 @@ const adminNav = [
   { to: "/admin/users", label: "Users", icon: Users },
   { to: "/admin/invitations", label: "Invitations", icon: Mail },
   { to: "/admin/projects", label: "Projects", icon: FolderKanban },
+  { to: "/admin/devices", label: "Devices", icon: Monitor },
   { to: "/admin/analytics", label: "Analytics", icon: FileBarChart },
   { to: "/admin/screenshots", label: "Screenshots", icon: Camera },
   { to: "/admin/settings", label: "Settings", icon: Settings },

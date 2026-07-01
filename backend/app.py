@@ -123,12 +123,14 @@ def serve_screenshot(filename):
 
     # Check MongoDB to see if we have this screenshot uploaded to Cloudinary
     try:
-        shot = screenshots_collection.find_one({
-            "$or": [
-                {"file_path": {"$regex": basename}},
-                {"cloudinary_url": {"$regex": basename}}
-            ]
-        })
+        shot = screenshots_collection.find_one({"file_basename": basename})
+        if not shot:
+            shot = screenshots_collection.find_one({
+                "$or": [
+                    {"file_path": {"$regex": basename}},
+                    {"cloudinary_url": {"$regex": basename}}
+                ]
+            })
         if shot and shot.get("uploaded_to_cloud") and shot.get("cloudinary_url"):
             return redirect(shot.get("cloudinary_url"))
     except Exception as e:
