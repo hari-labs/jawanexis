@@ -66,7 +66,7 @@ export function Invitations() {
   }
 
   const handleCopy = (token: string) => {
-    const link = `http://localhost:5173/activate?token={token}`
+    const link = `${window.location.origin}/activate?token=${token}`
     navigator.clipboard.writeText(link)
     setCopiedToken(token)
     setTimeout(() => setCopiedToken(null), 2000)

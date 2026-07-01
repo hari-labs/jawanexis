@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, send_from_directory, g, request, has_app_context
 from flask_cors import CORS
 from routes.users import users_bp
@@ -20,7 +22,8 @@ from pymongo.collection import Collection
 app = Flask(__name__)
 
 # Allow frontend to access backend
-CORS(app)
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+CORS(app, origins=[frontend_url])
 
 # Wrap pymongo collection methods to measure database query time
 original_collection_methods = {}

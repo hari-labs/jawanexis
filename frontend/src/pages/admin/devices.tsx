@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { getUserId, authFetch } from "@/services/api"
+import { getUserId, authFetch, BASE_URL } from "@/services/api"
 
 interface Device {
   _id: string
@@ -32,7 +32,7 @@ export function DevicesPage() {
 
   const fetchDevices = async () => {
     try {
-      const response = await fetch("http://localhost:5000/monitoring/devices", {
+      const response = await fetch(`${BASE_URL}/monitoring/devices`, {
         headers: { "X-User-Id": getUserId() },
       })
       if (!response.ok) throw new Error("Failed to fetch devices")
@@ -47,7 +47,7 @@ export function DevicesPage() {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch("http://localhost:5000/users/", {
+      const response = await fetch(`${BASE_URL}/users/`, {
         headers: { "X-User-Id": localStorage.getItem("id") || "" },
       })
       if (response.ok) {
@@ -61,7 +61,7 @@ export function DevicesPage() {
 
   const assignDevice = async (deviceUuid: string, userId: string | null) => {
     try {
-      const response = await fetch(`http://localhost:5000/monitoring/devices/${deviceUuid}/assign`, {
+      const response = await fetch(`${BASE_URL}/monitoring/devices/${deviceUuid}/assign`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
