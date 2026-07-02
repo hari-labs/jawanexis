@@ -790,18 +790,36 @@ def get_intern_summary(user_id, dashboard=False):
         # ── Session history ────────────────────────
         serialized_sessions = []
         from config.productivity_rules import calculate_productivity
-        for s in all_sessions[:20]:
-            sess_res = calculate_productivity(uid, str(s["_id"]))
-            serialized_sessions.append({
-                "id": str(s["_id"]),
-                "start_time": s.get("start_time", ""),
-                "end_time": s.get("end_time", ""),
-                "active_minutes": round(sess_res["active_minutes"], 1),
-                "idle_minutes": round(sess_res["idle_minutes"], 1),
-                "locked_minutes": round(sess_res["locked_minutes"], 1),
-                "productivity": sess_res["productivity"],
-                "status": s.get("status", "ENDED")
-            })
+        
+        # DEMO OPTIMIZATION: Limit productivity calculation loops
+        # Dashboard only needs top-level stats, not historical sessions.
+        # Intern page can just show the last 3 sessions to stay under Render's 30s timeout.
+        calc_limit = 0 if dashboard else 3
+
+        for i, s in enumerate(all_sessions[:20]):
+            if i < calc_limit:
+                sess_res = calculate_productivity(uid, str(s["_id"]))
+                serialized_sessions.append({
+                    "id": str(s["_id"]),
+                    "start_time": s.get("start_time", ""),
+                    "end_time": s.get("end_time", ""),
+                    "active_minutes": round(sess_res["active_minutes"], 1),
+                    "idle_minutes": round(sess_res["idle_minutes"], 1),
+                    "locked_minutes": round(sess_res["locked_minutes"], 1),
+                    "productivity": sess_res["productivity"],
+                    "status": s.get("status", "ENDED")
+                })
+            else:
+                serialized_sessions.append({
+                    "id": str(s["_id"]),
+                    "start_time": s.get("start_time", ""),
+                    "end_time": s.get("end_time", ""),
+                    "active_minutes": 0.0,
+                    "idle_minutes": 0.0,
+                    "locked_minutes": 0.0,
+                    "productivity": 0,
+                    "status": s.get("status", "ENDED")
+                })
 
         # ── Avatar color ───────────────────────────
         palette = [
