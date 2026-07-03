@@ -62,12 +62,12 @@ export function AdminDashboard() {
   useEffect(() => {
     loadData()
     
-    // Poll monitoring status every 5 seconds
+    // Poll monitoring status every 15 seconds
     const statusPoll = setInterval(() => {
       getAllMonitoringStatus()
         .then(data => setMonitoringStatuses(data))
         .catch(err => {})
-    }, 5000)
+    }, 15000)
 
     return () => clearInterval(statusPoll)
   }, [])

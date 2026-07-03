@@ -114,11 +114,11 @@ export function InternDashboard() {
           if (!active) return
           await pollDashboardData(uid)
           if (active) {
-            timerId = setTimeout(runPoll, 15000)
+            timerId = setTimeout(runPoll, 60000)
           }
         }
         
-        timerId = setTimeout(runPoll, 15000)
+        timerId = setTimeout(runPoll, 60000)
         
         return () => {
           active = false

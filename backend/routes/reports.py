@@ -878,7 +878,7 @@ def get_intern_summary(user_id, dashboard=False):
 
         # ── Team Lead analytics ────────────────────
         team_stats = None
-        if role in ["team_lead", "team lead"]:
+        if role in ["team_lead", "team lead"] and not dashboard:
             team_stats = _build_team_lead_stats(uid, user)
 
         summary = {
@@ -1509,9 +1509,18 @@ def get_work_time_trend():
 # Public Stats (For Landing Page)
 # ─────────────────────────────────────────────────
 
+_public_stats_cache = {
+    "data": None,
+    "timestamp": 0
+}
+
 @reports_bp.route("/public-stats", methods=["GET"])
 def get_public_stats():
     try:
+        current_time = time.time()
+        if _public_stats_cache["data"] and (current_time - _public_stats_cache["timestamp"] < 300):
+            return jsonify(_public_stats_cache["data"])
+
         interns = list(users_collection.find({"role": {"$in": ["intern", "user"]}}))
         registered_interns = len(interns)
         
@@ -1531,7 +1540,7 @@ def get_public_stats():
         projects = projects_collection.count_documents({})
         screenshots_captured = screenshots_collection.count_documents({})
         
-        return jsonify({
+        result = {
             "registered_interns": registered_interns,
             "active_users": active_users,
             "projects": projects,
@@ -1539,7 +1548,12 @@ def get_public_stats():
             "hours_tracked": hours_tracked,
             "screenshots_captured": screenshots_captured,
             "today_active_monitoring": active_users
-        })
+        }
+        
+        _public_stats_cache["data"] = result
+        _public_stats_cache["timestamp"] = current_time
+        
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
