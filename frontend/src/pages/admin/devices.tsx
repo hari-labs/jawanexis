@@ -32,9 +32,7 @@ export function DevicesPage() {
 
   const fetchDevices = async () => {
     try {
-      const response = await fetch(`${BASE_URL}/monitoring/devices`, {
-        headers: { "X-User-Id": getUserId() },
-      })
+      const response = await authFetch(`${BASE_URL}/monitoring/devices`)
       if (!response.ok) throw new Error("Failed to fetch devices")
       const data = await response.json()
       setDevices(data.devices || [])
@@ -47,9 +45,7 @@ export function DevicesPage() {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch(`${BASE_URL}/users/`, {
-        headers: { "X-User-Id": localStorage.getItem("id") || "" },
-      })
+      const response = await authFetch(`${BASE_URL}/users/`)
       if (response.ok) {
         const data = await response.json()
         setUsers(Array.isArray(data) ? data : [])
@@ -61,11 +57,10 @@ export function DevicesPage() {
 
   const assignDevice = async (deviceUuid: string, userId: string | null) => {
     try {
-      const response = await fetch(`${BASE_URL}/monitoring/devices/${deviceUuid}/assign`, {
+      const response = await authFetch(`${BASE_URL}/monitoring/devices/${deviceUuid}/assign`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "X-User-Id": localStorage.getItem("user_id") || "",
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({ user_id: userId }),
       })
