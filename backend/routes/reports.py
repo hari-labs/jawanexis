@@ -231,7 +231,7 @@ def _resolve_session_for_telemetry(doc, time_field="start_time", sessions_cache=
             return sess
     return None
 
-def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE"):
+def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE", include_screenshots=True):
     """
     Consolidated shared aggregation helper using central productivity engine.
     """
@@ -293,61 +293,62 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
         normalized_scope = "WEEK"
     scope = normalized_scope
 
-    # Screenshot query
-    if normalized_scope == "SESSION" and session_id:
-        session_ids_to_query = [session_id]
-        if ObjectId.is_valid(str(session_id)):
-            session_ids_to_query.append(ObjectId(str(session_id)))
-        try:
-            session_ids_to_query.append(int(str(session_id)))
-        except (ValueError, TypeError):
-            pass
-        shot_query = {"session_id": {"$in": session_ids_to_query}}
-    else:
-        shot_query = {"user_id": {"$in": resolved_ids}}
-
-    if normalized_scope == "TODAY":
-        ist_start = datetime(today_local_dt.year, today_local_dt.month, today_local_dt.day, 0, 0, 0)
-        utc_start = ist_start - timedelta(minutes=330)
-        oldest_possible_utc = (utc_start - timedelta(days=1)).isoformat()
-        shot_query["captured_at"] = {"$gte": oldest_possible_utc}
-    elif normalized_scope == "WEEK":
-        oldest_possible_utc = (today_local_dt - timedelta(days=8)).isoformat()
-        shot_query["captured_at"] = {"$gte": oldest_possible_utc}
-
-    shots = list(screenshots_collection.find(
-        shot_query,
-        {"session_id": 1, "captured_at": 1, "file_path": 1, "app_name": 1, "app": 1, "window_title": 1, "uploaded_to_cloud": 1, "cloudinary_url": 1, "user_id": 1}
-    ).sort("captured_at", -1))
-
-    all_sessions = list(sessions_collection.find({"user_id": {"$in": resolved_ids}}).sort("start_time", -1))
-    sessions_cache = {str(s["_id"]): s for s in all_sessions}
-    sessions_cache["all_sessions"] = all_sessions
-
-    filtered_shots = []
-    for shot in shots:
-        if normalized_scope == "TODAY":
-            local_dt = _utc_to_local_ist(shot.get("captured_at"))
-            if not local_dt or local_dt.strftime("%Y-%m-%d") != today_prefix:
-                continue
-        elif normalized_scope == "WEEK":
-            local_dt = _utc_to_local_ist(shot.get("captured_at"))
-            if not local_dt:
-                continue
-            date_diff = (today_local_dt - local_dt).days
-            if date_diff < 0 or date_diff >= 7:
-                continue
-        elif normalized_scope == "SESSION" and session_id:
-            sess = _resolve_session_for_telemetry(shot, time_field="captured_at", sessions_cache=sessions_cache)
-            if not sess or str(sess["_id"]) != str(session_id):
-                continue
-        filtered_shots.append(shot)
-
     screenshots_list = []
-    for shot in filtered_shots:
-        fmt_shot = _format_screenshot(shot)
-        if fmt_shot:
-            screenshots_list.append(fmt_shot)
+    if include_screenshots:
+        # Screenshot query
+        if normalized_scope == "SESSION" and session_id:
+            session_ids_to_query = [session_id]
+            if ObjectId.is_valid(str(session_id)):
+                session_ids_to_query.append(ObjectId(str(session_id)))
+            try:
+                session_ids_to_query.append(int(str(session_id)))
+            except (ValueError, TypeError):
+                pass
+            shot_query = {"session_id": {"$in": session_ids_to_query}}
+        else:
+            shot_query = {"user_id": {"$in": resolved_ids}}
+    
+        if normalized_scope == "TODAY":
+            ist_start = datetime(today_local_dt.year, today_local_dt.month, today_local_dt.day, 0, 0, 0)
+            utc_start = ist_start - timedelta(minutes=330)
+            oldest_possible_utc = (utc_start - timedelta(days=1)).isoformat()
+            shot_query["captured_at"] = {"$gte": oldest_possible_utc}
+        elif normalized_scope == "WEEK":
+            oldest_possible_utc = (today_local_dt - timedelta(days=8)).isoformat()
+            shot_query["captured_at"] = {"$gte": oldest_possible_utc}
+    
+        shots = list(screenshots_collection.find(
+            shot_query,
+            {"session_id": 1, "captured_at": 1, "file_path": 1, "app_name": 1, "app": 1, "window_title": 1, "uploaded_to_cloud": 1, "cloudinary_url": 1, "user_id": 1}
+        ).sort("captured_at", -1))
+    
+        all_sessions = list(sessions_collection.find({"user_id": {"$in": resolved_ids}}).sort("start_time", -1))
+        sessions_cache = {str(s["_id"]): s for s in all_sessions}
+        sessions_cache["all_sessions"] = all_sessions
+    
+        filtered_shots = []
+        for shot in shots:
+            if normalized_scope == "TODAY":
+                local_dt = _utc_to_local_ist(shot.get("captured_at"))
+                if not local_dt or local_dt.strftime("%Y-%m-%d") != today_prefix:
+                    continue
+            elif normalized_scope == "WEEK":
+                local_dt = _utc_to_local_ist(shot.get("captured_at"))
+                if not local_dt:
+                    continue
+                date_diff = (today_local_dt - local_dt).days
+                if date_diff < 0 or date_diff >= 7:
+                    continue
+            elif normalized_scope == "SESSION" and session_id:
+                sess = _resolve_session_for_telemetry(shot, time_field="captured_at", sessions_cache=sessions_cache)
+                if not sess or str(sess["_id"]) != str(session_id):
+                    continue
+            filtered_shots.append(shot)
+    
+        for shot in filtered_shots:
+            fmt_shot = _format_screenshot(shot)
+            if fmt_shot:
+                screenshots_list.append(fmt_shot)
 
     # 2. Call the Central Productivity Engine
     # If single user, delegate directly to avoid duplicate logic
@@ -470,7 +471,7 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
 def _build_user_summary(user):
     """Build full stats summary for a user."""
     uid = str(user["_id"])
-    stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
+    stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE", include_screenshots=False)
 
     all_sessions = _get_user_sessions(uid)
     latest_session = all_sessions[0] if all_sessions else None
@@ -1344,7 +1345,7 @@ def get_app_usage():
             vis_scope = "ADMIN_SCOPE"
             target_uid = caller_id
 
-    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope)
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False)
     
     # Format and sort
     apps_list = []
@@ -1392,7 +1393,7 @@ def get_site_usage():
             vis_scope = "ADMIN_SCOPE"
             target_uid = caller_id
 
-    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope)
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False)
     
     # Format and sort
     sites_list = []
@@ -1528,7 +1529,7 @@ def get_public_stats():
         total_active_mins = 0.0
         for intern in interns:
             uid = str(intern["_id"])
-            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
+            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE", include_screenshots=False)
             if stats["tracked_mins"] > 0:
                 prod_scores.append(stats["productivity"])
             total_active_mins += stats["active_mins"]
