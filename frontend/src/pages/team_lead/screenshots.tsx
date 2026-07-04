@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/page-header"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
-import { getUsers, getScreenshots, getAssignedProjects } from "@/services/api"
+import { getUsersList, getScreenshots, getAssignedProjects } from "@/services/api"
 import { BASE_URL } from "@/services/api";
 
 interface Screenshot {
@@ -57,7 +57,7 @@ export function TeamScreenshots() {
           return
       }
       if (isTeamLead) {
-          Promise.all([getUsers(), getAssignedProjects(currentUser.id)])
+          Promise.all([getUsersList(), getAssignedProjects(currentUser.id)])
               .then(([allUsers, projects]) => {
                   const assignedMemberIds = new Set(
                       projects.flatMap((p: any) => p.members?.map((m: any) => m.id) || [])
@@ -70,7 +70,7 @@ export function TeamScreenshots() {
               })
               .catch(err => console.error(err))
       } else {
-          getUsers()
+          getUsersList()
               .then(data => {
                   const filtered = data.filter((u: any) => 
                       u.role.toLowerCase() === "intern" || u.role.toLowerCase() === "team_lead" || u.role.toLowerCase() === "team lead"

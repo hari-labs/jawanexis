@@ -36,6 +36,11 @@ export async function getUsers() {
     return await response.json()
 }
 
+export async function getUsersList() {
+    const response = await authFetch(`${BASE_URL}/users/list`)
+    return await response.json()
+}
+
 export async function getSessions() {
     const response = await authFetch(`${BASE_URL}/sessions`)
     return await response.json()

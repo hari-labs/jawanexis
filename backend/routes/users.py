@@ -24,6 +24,20 @@ def get_users():
         users.append(user)
     return jsonify(users)
 
+@users_bp.route("/list", methods=["GET"])
+def get_users_list():
+    users = []
+    for user in users_collection.find({}, {"name": 1, "role": 1, "avatarColor": 1, "email": 1}):
+        users.append({
+            "_id": str(user["_id"]),
+            "id": str(user["_id"]),
+            "name": user.get("name", ""),
+            "role": user.get("role", "intern"),
+            "avatarColor": user.get("avatarColor", ""),
+            "email": user.get("email", "")
+        })
+    return jsonify(users)
+
 @users_bp.route("/<user_id>/toggle-active", methods=["POST"])
 def toggle_active(user_id):
     try:

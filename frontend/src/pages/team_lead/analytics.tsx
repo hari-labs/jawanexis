@@ -19,7 +19,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Avatar } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { StatCard } from "@/components/stat-card"
-import { getAppUsage, getSiteUsage, categoryColor, getProductivityTrend, getWorkTimeTrend, getUsers, getAssignedProjects, getInternSummary, getScreenshots } from "@/services/api"
+import { getAppUsage, getSiteUsage, categoryColor, getProductivityTrend, getWorkTimeTrend, getUsersList, getAssignedProjects, getInternSummary, getScreenshots } from "@/services/api"
 import { BASE_URL } from "@/services/api";
 
 const tabs = [
@@ -54,7 +54,7 @@ export function TeamAnalytics() {
 
   useEffect(() => {
     if (isTeamLead) {
-        Promise.all([getUsers(), getAssignedProjects(currentUser.id)])
+        Promise.all([getUsersList(), getAssignedProjects(currentUser.id)])
             .then(([allUsers, projects]) => {
                 const assignedMemberIds = new Set(
                     projects.flatMap((p: any) => p.members?.map((m: any) => m.id) || [])
@@ -66,7 +66,7 @@ export function TeamAnalytics() {
             })
             .catch(() => {})
     } else {
-        getUsers()
+        getUsersList()
             .then((data) => {
                 setTeamMembers(data.filter((u: any) => 
                     u.role.toLowerCase() === "intern" || u.role.toLowerCase() === "team_lead" || u.role.toLowerCase() === "team lead"

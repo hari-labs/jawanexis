@@ -27,7 +27,7 @@ import {
   Eye
 } from "lucide-react"
 import {
-  getUsers,
+  getUsersList,
   getProjects,
   createProject,
   archiveProject,
@@ -108,7 +108,7 @@ export function ProjectsPage() {
     setLoading(true)
     Promise.all([
       getProjects(),
-      getUsers()
+      getUsersList()
     ]).then(([projectsData, usersData]) => {
       setProjects(projectsData)
       setUsers(usersData)

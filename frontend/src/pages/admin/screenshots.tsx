@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar } from "@/components/ui/avatar"
 import { MockScreenshot } from "@/components/mock-screenshot"
-import { getUsers, getScreenshots } from "@/services/api"
+import { getUsersList, getScreenshots } from "@/services/api"
 import { BASE_URL } from "@/services/api";
 
 interface Screenshot {
@@ -49,7 +49,7 @@ export function Screenshots() {
   const [preview, setPreview] = useState<Screenshot | null>(null)
 
   useEffect(() => {
-      getUsers()
+      getUsersList()
           .then(data => {
               setUsers(data)
               if (data.length > 0) {
