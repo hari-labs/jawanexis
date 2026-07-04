@@ -745,7 +745,24 @@ def get_intern_summary(user_id, dashboard=False, activity_page=False):
         session_id_filter = request.args.get("session_id") if request else None
 
         include_shots = not dashboard
-        if session_id_filter in ("today", "TODAY_SCOPE"):
+        if dashboard:
+            stats = {
+                "tracked_mins": 0.0,
+                "active_mins": 0.0,
+                "idle_mins": 0.0,
+                "locked_mins": 0.0,
+                "productive_mins": 0.0,
+                "neutral_mins": 0.0,
+                "unproductive_mins": 0.0,
+                "efficiency_ratio": 0.0,
+                "activity_ratio": 0.0,
+                "productivity": 0,
+                "apps": [],
+                "sites": [],
+                "screenshots": [],
+                "screenshot_count": 0
+            }
+        elif session_id_filter in ("today", "TODAY_SCOPE"):
             stats = aggregate_telemetry(uid, "TODAY_SCOPE", include_screenshots=include_shots)
         elif session_id_filter in ("week", "WEEK_SCOPE"):
             stats = aggregate_telemetry(uid, "WEEK_SCOPE", include_screenshots=include_shots)
