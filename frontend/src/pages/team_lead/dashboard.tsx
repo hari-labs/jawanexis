@@ -248,8 +248,8 @@ export function TeamLeadDashboard() {
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div className="flex items-center justify-between">
         <PageHeader 
-          heading="Team Lead Dashboard" 
-          text="Monitor team performance and manage your own tasks."
+          title="Team Lead Dashboard" 
+          description="Monitor team performance and manage your own tasks."
         />
         <Button variant="outline" onClick={handleManualRefresh} disabled={isPollingRef.current}>
           <Circle className={`mr-2 h-4 w-4 ${isPollingRef.current ? "animate-spin" : ""}`} />
