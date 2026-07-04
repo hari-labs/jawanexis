@@ -48,9 +48,21 @@ export function TeamAnalytics() {
     isTeamLead ? currentUser.id : "all"
   )
   
-  const [appUsage, setAppUsage] = useState<any[]>([])
-  const [siteUsage, setSiteUsage] = useState<any[]>([])
+  const [appUsage, setAppUsage] = useState<any[] | null>(null)
+  const [siteUsage, setSiteUsage] = useState<any[] | null>(null)
   const [summary, setSummary] = useState<any>(null)
+  
+  const [productivityData, setProductivityData] = useState<any[] | null>(null)
+  const [workTimeData, setWorkTimeData] = useState<any[] | null>(null)
+  const [screenshotData, setScreenshotData] = useState<any[] | null>(null)
+  const getLocalDateString = () => {
+    const d = new Date()
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, "0")
+    const day = String(d.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
+  }
+  const [screenshotDate, setScreenshotDate] = useState<string>(getLocalDateString())
 
   useEffect(() => {
     if (isTeamLead) {
@@ -77,32 +89,62 @@ export function TeamAnalytics() {
   }, [])
 
   useEffect(() => {
+    setAppUsage(null)
+    setSiteUsage(null)
+    setProductivityData(null)
+    setWorkTimeData(null)
+    setScreenshotData(null)
+    setSummary(null)
+  }, [selectedMemberId])
+
+  useEffect(() => {
+    setScreenshotData(null)
+  }, [screenshotDate])
+
+  useEffect(() => {
     const controller = new AbortController()
     const memberId = selectedMemberId === "all" ? undefined : selectedMemberId
-    
-    getAppUsage(memberId, { signal: controller.signal })
-      .then(data => setAppUsage(data))
-      .catch((err) => {
-        if (err.name !== "AbortError") console.error(err)
-      })
-      
-    getSiteUsage(memberId, { signal: controller.signal })
-      .then(data => setSiteUsage(data))
-      .catch((err) => {
-        if (err.name !== "AbortError") console.error(err)
-      })
-
     const targetId = selectedMemberId === "all" ? currentUser.id : selectedMemberId
-    getInternSummary(targetId, undefined, { signal: controller.signal })
-      .then(data => setSummary(data))
-      .catch((err) => {
-        if (err.name !== "AbortError") console.error(err)
-      })
-      
+
+    if (!summary) {
+      getInternSummary(targetId, undefined, { signal: controller.signal })
+        .then(data => setSummary(data))
+        .catch((err) => {
+          if (err.name !== "AbortError") console.error(err)
+        })
+    }
+    
+    if (tab === "apps" && appUsage === null) {
+      getAppUsage(memberId, { signal: controller.signal })
+        .then(data => setAppUsage(data))
+        .catch((err) => {
+          if (err.name !== "AbortError") console.error(err)
+        })
+    } else if (tab === "sites" && siteUsage === null) {
+      getSiteUsage(memberId, { signal: controller.signal })
+        .then(data => setSiteUsage(data))
+        .catch((err) => {
+          if (err.name !== "AbortError") console.error(err)
+        })
+    } else if (tab === "productivity" && productivityData === null) {
+      getProductivityTrend(7, memberId)
+        .then(data => setProductivityData(data))
+    } else if (tab === "worktime" && workTimeData === null) {
+      getWorkTimeTrend(7, memberId)
+        .then(data => setWorkTimeData(data))
+    } else if (tab === "screenshots" && screenshotData === null) {
+      getScreenshots(memberId, screenshotDate)
+        .then((data) => {
+          const sorted = [...data].sort((a: any, b: any) => b.hour.localeCompare(a.hour))
+          setScreenshotData(sorted)
+        })
+        .catch(() => {})
+    }
+
     return () => {
       controller.abort()
     }
-  }, [selectedMemberId])
+  }, [tab, selectedMemberId, screenshotDate, appUsage, siteUsage, productivityData, workTimeData, screenshotData, summary, currentUser.id])
 
   const selectedMember = teamMembers.find((m) => m.id === selectedMemberId)
 
@@ -176,16 +218,33 @@ export function TeamAnalytics() {
         ))}
       </div>
 
-      {tab === "apps" && <UsageReport title="Application usage" data={appUsage.map((a) => ({ name: a.name, minutes: a.minutes, category: a.category }))} />}
-      {tab === "sites" && <UsageReport title="Website usage" data={siteUsage.map((s) => ({ name: s.domain, minutes: s.minutes, category: s.category }))} />}
-      {tab === "productivity" && <ProductivityReport memberId={selectedMemberId === "all" ? undefined : selectedMemberId} />}
-      {tab === "worktime" && <WorkTimeReport memberId={selectedMemberId === "all" ? undefined : selectedMemberId} />}
-      {tab === "screenshots" && <ScreenshotsReport memberId={selectedMemberId === "all" ? undefined : selectedMemberId} teamMembers={teamMembers} />}
+      {tab === "apps" && <UsageReport title="Application usage" data={appUsage ? appUsage.map((a) => ({ name: a.name, minutes: a.minutes, category: a.category })) : null} />}
+      {tab === "sites" && <UsageReport title="Website usage" data={siteUsage ? siteUsage.map((s) => ({ name: s.domain, minutes: s.minutes, category: s.category })) : null} />}
+      {tab === "productivity" && <ProductivityReport data={productivityData} />}
+      {tab === "worktime" && <WorkTimeReport data={workTimeData} />}
+      {tab === "screenshots" && <ScreenshotsReport data={screenshotData} date={screenshotDate} setDate={setScreenshotDate} teamMembers={teamMembers} />}
     </div>
   )
 }
 
-function UsageReport({ title, data }: { title: string; data: { name: string; minutes: number; category: string }[] }) {
+function UsageReport({ title, data }: { title: string; data: { name: string; minutes: number; category: string }[] | null }) {
+  if (data === null) {
+    return (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2 flex h-72 items-center justify-center">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" /> Loading...
+          </span>
+        </Card>
+        <Card className="flex h-72 items-center justify-center">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" /> Loading...
+          </span>
+        </Card>
+      </div>
+    )
+  }
+
   const sorted = [...data].sort((a, b) => b.minutes - a.minutes)
   const pie = categoryTotals(data)
   const totalMin = data.reduce((a, d) => a + d.minutes, 0)
@@ -251,13 +310,16 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
   )
 }
 
-function ProductivityReport({ memberId }: { memberId?: string }) {
-  const [data, setData] = useState<any[]>([])
-
-  useEffect(() => {
-    getProductivityTrend(7, memberId)
-      .then(res => setData(res))
-  }, [memberId])
+function ProductivityReport({ data }: { data: any[] | null }) {
+  if (data === null) {
+    return (
+      <Card className="flex h-96 items-center justify-center">
+        <span className="text-sm text-muted-foreground flex items-center gap-2">
+          <Activity className="h-4 w-4 animate-spin" /> Loading...
+        </span>
+      </Card>
+    )
+  }
 
   return (
     <Card>
@@ -288,13 +350,16 @@ function ProductivityReport({ memberId }: { memberId?: string }) {
   )
 }
 
-function WorkTimeReport({ memberId }: { memberId?: string }) {
-  const [data, setData] = useState<any[]>([])
-
-  useEffect(() => {
-    getWorkTimeTrend(7, memberId)
-      .then(res => setData(res))
-  }, [memberId])
+function WorkTimeReport({ data }: { data: any[] | null }) {
+  if (data === null) {
+    return (
+      <Card className="flex h-96 items-center justify-center">
+        <span className="text-sm text-muted-foreground flex items-center gap-2">
+          <Activity className="h-4 w-4 animate-spin" /> Loading...
+        </span>
+      </Card>
+    )
+  }
 
   return (
     <Card>
@@ -319,27 +384,33 @@ function WorkTimeReport({ memberId }: { memberId?: string }) {
   )
 }
 
-function ScreenshotsReport({ memberId, teamMembers }: { memberId?: string; teamMembers: any[] }) {
-  const [screenshotHours, setScreenshotHours] = useState<any[]>([])
-  const getLocalDateString = () => {
-    const d = new Date()
-    const year = d.getFullYear()
-    const month = String(d.getMonth() + 1).padStart(2, "0")
-    const day = String(d.getDate()).padStart(2, "0")
-    return `${year}-${month}-${day}`
-  }
-
-  const [date, setDate] = useState(getLocalDateString())
+function ScreenshotsReport({ data, date, setDate, teamMembers }: { data: any[] | null; date: string; setDate: (v: string) => void; teamMembers: any[] }) {
   const [preview, setPreview] = useState<any>(null)
 
-  useEffect(() => {
-    getScreenshots(memberId, date).then((data) => {
-      const sorted = [...data].sort((a: any, b: any) => b.hour.localeCompare(a.hour))
-      setScreenshotHours(sorted)
-    }).catch(() => {})
-  }, [memberId, date])
+  if (data === null) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-secondary/20 p-4 rounded-xl border border-border">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium outline-none focus:border-ring w-48"
+            />
+          </div>
+        </div>
+        <div className="flex h-64 items-center justify-center rounded-xl border border-border bg-card">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" /> Loading...
+          </span>
+        </div>
+      </div>
+    )
+  }
 
-  const total = screenshotHours.reduce((a, h) => a + h.shots.length, 0)
+  const total = data.reduce((a, h) => a + h.shots.length, 0)
 
   return (
     <div className="space-y-4">
@@ -360,7 +431,7 @@ function ScreenshotsReport({ memberId, teamMembers }: { memberId?: string; teamM
       </div>
 
       <div className="flex flex-col gap-6">
-        {screenshotHours.map((group) => (
+        {data.map((group) => (
           <section key={group.hour}>
             <div className="mb-3 flex items-center gap-2">
               <Clock className="h-4 w-4 text-muted-foreground" />
@@ -405,7 +476,7 @@ function ScreenshotsReport({ memberId, teamMembers }: { memberId?: string; teamM
             </div>
           </section>
         ))}
-        {screenshotHours.length === 0 && (
+        {data.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-10">No screenshots captured for this date.</p>
         )}
       </div>

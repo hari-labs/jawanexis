@@ -13,7 +13,7 @@ import {
   AreaChart,
   Area,
 } from "recharts"
-import { Download, AppWindow, Globe, Gauge, Clock } from "lucide-react"
+import { Download, AppWindow, Globe, Gauge, Clock, Activity } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -38,16 +38,22 @@ const categoryTotals = (data: { category: string; minutes: number }[]) => {
 
 export function Reports() {
   const [tab, setTab] = useState<Tab>("apps")
-  const [appUsage, setAppUsage] = useState<any[]>([])
-  const [siteUsage, setSiteUsage] = useState<any[]>([])
+  const [appUsage, setAppUsage] = useState<any[] | null>(null)
+  const [siteUsage, setSiteUsage] = useState<any[] | null>(null)
+  const [productivityData, setProductivityData] = useState<any[] | null>(null)
+  const [workTimeData, setWorkTimeData] = useState<any[] | null>(null)
 
   useEffect(() => {
-      getAppUsage()
-          .then(data => setAppUsage(data))
-
-      getSiteUsage()
-          .then(data => setSiteUsage(data))
-  }, [])
+    if (tab === "apps" && appUsage === null) {
+      getAppUsage().then(data => setAppUsage(data))
+    } else if (tab === "sites" && siteUsage === null) {
+      getSiteUsage().then(data => setSiteUsage(data))
+    } else if (tab === "productivity" && productivityData === null) {
+      getProductivityTrend().then(data => setProductivityData(data))
+    } else if (tab === "worktime" && workTimeData === null) {
+      getWorkTimeTrend().then(data => setWorkTimeData(data))
+    }
+  }, [tab, appUsage, siteUsage, productivityData, workTimeData])
 
   return (
     <div>
@@ -80,15 +86,32 @@ export function Reports() {
         ))}
       </div>
 
-      {tab === "apps" && <UsageReport title="Application usage" data={appUsage.map((a) => ({ name: a.name, minutes: a.minutes, category: a.category }))} />}
-      {tab === "sites" && <UsageReport title="Website usage" data={siteUsage.map((s) => ({ name: s.domain, minutes: s.minutes, category: s.category }))} />}
-      {tab === "productivity" && <ProductivityReport />}
-      {tab === "worktime" && <WorkTimeReport />}
+      {tab === "apps" && <UsageReport title="Application usage" data={appUsage ? appUsage.map((a) => ({ name: a.name, minutes: a.minutes, category: a.category })) : null} />}
+      {tab === "sites" && <UsageReport title="Website usage" data={siteUsage ? siteUsage.map((s) => ({ name: s.domain, minutes: s.minutes, category: s.category })) : null} />}
+      {tab === "productivity" && <ProductivityReport data={productivityData} />}
+      {tab === "worktime" && <WorkTimeReport data={workTimeData} />}
     </div>
   )
 }
 
-function UsageReport({ title, data }: { title: string; data: { name: string; minutes: number; category: string }[] }) {
+function UsageReport({ title, data }: { title: string; data: { name: string; minutes: number; category: string }[] | null }) {
+  if (data === null) {
+    return (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2 flex h-72 items-center justify-center">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" /> Loading...
+          </span>
+        </Card>
+        <Card className="flex h-72 items-center justify-center">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" /> Loading...
+          </span>
+        </Card>
+      </div>
+    )
+  }
+
   const sorted = [...data].sort((a, b) => b.minutes - a.minutes)
   const pie = categoryTotals(data)
   const totalMin = data.reduce((a, d) => a + d.minutes, 0)
@@ -154,13 +177,16 @@ function UsageReport({ title, data }: { title: string; data: { name: string; min
   )
 }
 
-function ProductivityReport() {
-  const [data, setData] = useState<any[]>([])
-
-  useEffect(() => {
-    getProductivityTrend()
-      .then(res => setData(res))
-  }, [])
+function ProductivityReport({ data }: { data: any[] | null }) {
+  if (data === null) {
+    return (
+      <Card className="flex h-96 items-center justify-center">
+        <span className="text-sm text-muted-foreground flex items-center gap-2">
+          <Activity className="h-4 w-4 animate-spin" /> Loading...
+        </span>
+      </Card>
+    )
+  }
 
   return (
     <Card>
@@ -191,13 +217,16 @@ function ProductivityReport() {
   )
 }
 
-function WorkTimeReport() {
-  const [data, setData] = useState<any[]>([])
-
-  useEffect(() => {
-    getWorkTimeTrend()
-      .then(res => setData(res))
-  }, [])
+function WorkTimeReport({ data }: { data: any[] | null }) {
+  if (data === null) {
+    return (
+      <Card className="flex h-96 items-center justify-center">
+        <span className="text-sm text-muted-foreground flex items-center gap-2">
+          <Activity className="h-4 w-4 animate-spin" /> Loading...
+        </span>
+      </Card>
+    )
+  }
 
   return (
     <Card>
