@@ -121,6 +121,23 @@ export function TeamLeadDashboard() {
     }
   }
 
+  // Fast polling for monitoring statuses
+  useEffect(() => {
+    const statusPoll = setInterval(() => {
+      getAllMonitoringStatus()
+        .then(data => {
+          setAllMonitoringStatuses(data)
+          const myStatus = data.find((s: any) => s.user_id === currentUser.id)
+          if (myStatus) updateOwnStatus(myStatus)
+        })
+        .catch(err => {})
+    }, 15000)
+    return () => clearInterval(statusPoll)
+  }, [currentUser.id])
+
+  // Heavy polling for analytics
+  const runPollRef = useRef<(() => Promise<void>) | null>(null)
+  
   useEffect(() => {
     pollDashboardData()
     
@@ -131,11 +148,12 @@ export function TeamLeadDashboard() {
       if (!active) return
       await pollDashboardData()
       if (active) {
-        timerId = setTimeout(runPoll, 60000)
+        timerId = setTimeout(runPoll, 300000)
       }
     }
     
-    timerId = setTimeout(runPoll, 60000)
+    runPollRef.current = runPoll
+    timerId = setTimeout(runPoll, 300000)
     
     return () => {
       active = false
@@ -145,6 +163,14 @@ export function TeamLeadDashboard() {
       }
     }
   }, [])
+
+  const handleManualRefresh = () => {
+    if (runPollRef.current) {
+      pollDashboardData()
+      // Note: In a robust implementation we might clear the existing timeout here,
+      // but triggering a manual poll is sufficient for immediate feedback.
+    }
+  }
 
   // Lead's own session duration ticker
   useEffect(() => {
@@ -219,8 +245,17 @@ export function TeamLeadDashboard() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader title="Team Lead Dashboard" description="Overview of your assigned team members and your own activity." />
+    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+      <div className="flex items-center justify-between">
+        <PageHeader 
+          heading="Team Lead Dashboard" 
+          text="Monitor team performance and manage your own tasks."
+        />
+        <Button variant="outline" onClick={handleManualRefresh} disabled={isPollingRef.current}>
+          <Circle className={`mr-2 h-4 w-4 ${isPollingRef.current ? "animate-spin" : ""}`} />
+          Refresh Data
+        </Button>
+      </div>
 
       {/* Persistent Monitoring Controls for the Lead (Monitored User) */}
       <Card className="overflow-hidden border-border/85 shadow-md">

@@ -13,7 +13,7 @@ import {
   Bar,
   Cell,
 } from "recharts"
-import { Users, Activity, Gauge, Clock, ArrowUpRight, Coffee, ShieldAlert, FolderKanban, ClipboardCheck, ListTodo, FileText, Download } from "lucide-react"
+import { Users, Activity, Gauge, Clock, ArrowUpRight, Coffee, ShieldAlert, FolderKanban, ClipboardCheck, ListTodo, FileText, Download, Circle } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { StatCard } from "@/components/stat-card"
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card"
@@ -46,17 +46,23 @@ export function AdminDashboard() {
   const [productivityTrend, setProductivityTrend] = useState<any[]>([])
   const [monitoringStatuses, setMonitoringStatuses] = useState<any[]>([])
 
-  const loadData = () => {
-    getCounts().then(data => setCounts(data))
-    getUsersList().then(data => setUsers(data))
-    getRecentActivity().then(data => setRecentActivity(data))
-    getAppUsage().then(data => setAppUsage(data))
-    getSiteUsage().then(data => setSiteUsage(data))
-    getProductivityTrend().then(data => setProductivityTrend(data))
-    
-    getAllMonitoringStatus()
-      .then(data => setMonitoringStatuses(data))
-      .catch(err => console.error(err))
+  const [isRefreshing, setIsRefreshing] = useState(false)
+
+  const loadData = async () => {
+    setIsRefreshing(true)
+    try {
+      setCounts(await getCounts())
+      setUsers(await getUsersList())
+      setRecentActivity(await getRecentActivity())
+      setAppUsage(await getAppUsage())
+      setSiteUsage(await getSiteUsage())
+      setProductivityTrend(await getProductivityTrend())
+      setMonitoringStatuses(await getAllMonitoringStatus())
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setIsRefreshing(false)
+    }
   }
 
   useEffect(() => {
@@ -113,14 +119,21 @@ export function AdminDashboard() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Dashboard" description="Real-time overview of your intern program's productivity.">
-        <Link to="/admin/invitations">
-          <Button>
-            Invite User
-            <ArrowUpRight className="h-4 w-4" />
+      <div className="flex items-center justify-between">
+        <PageHeader title="Dashboard" description="Real-time overview of your intern program's productivity." />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={loadData} disabled={isRefreshing}>
+            <Circle className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            Refresh Data
           </Button>
-        </Link>
-      </PageHeader>
+          <Link to="/admin/invitations">
+            <Button>
+              Invite User
+              <ArrowUpRight className="ml-2 h-4 w-4" />
+            </Button>
+          </Link>
+        </div>
+      </div>
 
       {/* Persistent Monitoring Counters */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">

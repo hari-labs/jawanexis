@@ -118,7 +118,7 @@ export function InternDashboard() {
           }
         }
         
-        timerId = setTimeout(runPoll, 60000)
+        timerId = setTimeout(runPoll, 300000)
         
         return () => {
           active = false
@@ -132,6 +132,36 @@ export function InternDashboard() {
       }
     }
   }, [])
+
+  // Fast polling for monitoring status
+  useEffect(() => {
+    if (!userId) return
+    const statusPoll = setInterval(() => {
+      getMonitoringStatus(userId)
+        .then(status => {
+          setMonitoringState(status.current_state || "STOPPED")
+          setAgentOnline(status.agent_online || false)
+          setSessionStartTime(status.started_at || null)
+          setLastSeen(status.last_seen || null)
+          
+          const serverElapsed = status.elapsed_seconds || 0
+          setElapsedSeconds((prev) => {
+            if (status.current_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
+              return serverElapsed
+            }
+            return prev
+          })
+        })
+        .catch(err => {})
+    }, 15000)
+    return () => clearInterval(statusPoll)
+  }, [userId])
+
+  const handleManualRefresh = () => {
+    if (userId) {
+      pollDashboardData(userId)
+    }
+  }
 
   // Local ticker for elapsed time
   useEffect(() => {
@@ -200,10 +230,16 @@ export function InternDashboard() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={`Welcome back, ${me.name.split(" ")[0]}`}
-        description="Here is your activity summary for today."
-      />
+      <div className="flex items-center justify-between">
+        <PageHeader
+          title={`Welcome back, ${me.name.split(" ")[0]}`}
+          description="Here is your activity summary for today."
+        />
+        <Button variant="outline" onClick={handleManualRefresh} disabled={isPollingRef.current}>
+          <Circle className={`mr-2 h-4 w-4 ${isPollingRef.current ? "animate-spin" : ""}`} />
+          Refresh Data
+        </Button>
+      </div>
 
       {/* Persistent Monitoring Controls */}
       <Card className="overflow-hidden border-border/80 shadow-md">
