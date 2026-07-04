@@ -61,6 +61,22 @@ def _hydrate_tasks(task_docs, resolve_evidence=False, evidence_user_id=None):
         for p in projects_collection.find({"_id": {"$in": project_query_ids}}):
             projects_lookup[str(p["_id"])] = p.get("name")
             
+    evidence_lookup = {}
+    if resolve_evidence:
+        task_ids = []
+        for t in task_docs:
+            tid = t.get("_id")
+            if tid:
+                task_ids.append(ObjectId(tid) if ObjectId.is_valid(tid) else tid)
+        if task_ids:
+            ev_query = {"task_id": {"$in": task_ids}}
+            if evidence_user_id:
+                ev_query["uploaded_by"] = {"$in": [evidence_user_id, ObjectId(evidence_user_id) if ObjectId.is_valid(evidence_user_id) else evidence_user_id]}
+            
+            # Sort by submitted_at ascending so that the latest evidence overwrites older ones in the dictionary
+            for ev in task_evidence_collection.find(ev_query).sort("submitted_at", 1):
+                evidence_lookup[str(ev["task_id"])] = ev
+
     hydrated = []
     for task in task_docs:
         task = serialize_doc(task)
@@ -77,12 +93,9 @@ def _hydrate_tasks(task_docs, resolve_evidence=False, evidence_user_id=None):
             task["project_name"] = projects_lookup[p_id]
             
         if resolve_evidence:
-            ev_query = {"task_id": ObjectId(task["_id"]) if ObjectId.is_valid(task["_id"]) else task["_id"]}
-            if evidence_user_id:
-                ev_query["uploaded_by"] = {"$in": [evidence_user_id, ObjectId(evidence_user_id) if ObjectId.is_valid(evidence_user_id) else evidence_user_id]}
-            evidence = task_evidence_collection.find_one(ev_query, sort=[("submitted_at", -1)])
-            if evidence:
-                task["evidence"] = serialize_doc(evidence)
+            task_id_str = str(task["_id"])
+            if task_id_str in evidence_lookup:
+                task["evidence"] = serialize_doc(evidence_lookup[task_id_str])
                 
         hydrated.append(task)
     return hydrated
@@ -543,26 +556,58 @@ def get_project_evidence(project_id):
     if ObjectId.is_valid(project_id):
         query = {"$or": [{"project_id": project_id}, {"project_id": ObjectId(project_id)}]}
         
-    evidence_list = []
-    for ev in task_evidence_collection.find(query).sort("submitted_at", -1):
+    raw_evidence = list(task_evidence_collection.find(query).sort("submitted_at", -1))
+    
+    filtered_evidence = []
+    user_ids = set()
+    task_ids = set()
+    
+    for ev in raw_evidence:
         ev = serialize_doc(ev)
-        
-        # Interns must not see other intern's evidence
         uploaded_by_str = str(ev.get("uploaded_by", ""))
         if caller_role == "intern" and uploaded_by_str != caller_id:
             continue
             
-        u_id = ev.get("uploaded_by")
-        if u_id:
-            u = users_collection.find_one({"_id": ObjectId(u_id) if ObjectId.is_valid(u_id) else u_id})
-            if u:
-                ev["user_name"] = u.get("name")
-                
-        t = tasks_collection.find_one({"_id": ObjectId(ev["task_id"])})
-        if t:
-            ev["task_title"] = t.get("title")
+        filtered_evidence.append(ev)
+        if ev.get("uploaded_by"):
+            user_ids.add(ev.get("uploaded_by"))
+        if ev.get("task_id"):
+            task_ids.add(ev.get("task_id"))
+            
+    user_query_ids = []
+    for uid in user_ids:
+        if ObjectId.is_valid(uid):
+            user_query_ids.append(ObjectId(uid))
+        user_query_ids.append(uid)
+        
+    task_query_ids = []
+    for tid in task_ids:
+        if ObjectId.is_valid(tid):
+            task_query_ids.append(ObjectId(tid))
+        task_query_ids.append(tid)
+        
+    users_dict = {}
+    if user_query_ids:
+        for u in users_collection.find({"_id": {"$in": user_query_ids}}):
+            users_dict[str(u["_id"])] = u.get("name")
+            
+    tasks_dict = {}
+    if task_query_ids:
+        for t in tasks_collection.find({"_id": {"$in": task_query_ids}}):
+            tasks_dict[str(t["_id"])] = t.get("title")
+            
+    evidence_list = []
+    for ev in filtered_evidence:
+        u_id_str = str(ev.get("uploaded_by", ""))
+        if u_id_str in users_dict:
+            ev["user_name"] = users_dict[u_id_str]
+            
+        t_id_str = str(ev.get("task_id", ""))
+        if t_id_str in tasks_dict:
+            ev["task_title"] = tasks_dict[t_id_str]
             
         evidence_list.append(ev)
+        
     return jsonify(evidence_list)
 
 @tasks_bp.route("/user/<user_id>", methods=["GET"])
@@ -638,25 +683,69 @@ def get_all_evidence():
             except (ValueError, TypeError):
                 pass
             
+    raw_evidence = list(task_evidence_collection.find(query).sort("submitted_at", -1))
+    
+    user_ids = set()
+    task_ids = set()
+    project_ids = set()
+    
+    for ev in raw_evidence:
+        if ev.get("uploaded_by"):
+            user_ids.add(ev.get("uploaded_by"))
+        if ev.get("task_id"):
+            task_ids.add(ev.get("task_id"))
+        if ev.get("project_id"):
+            project_ids.add(ev.get("project_id"))
+            
+    user_query_ids = []
+    for uid in user_ids:
+        if ObjectId.is_valid(uid):
+            user_query_ids.append(ObjectId(uid))
+        user_query_ids.append(uid)
+        
+    task_query_ids = []
+    for tid in task_ids:
+        if ObjectId.is_valid(tid):
+            task_query_ids.append(ObjectId(tid))
+        task_query_ids.append(tid)
+        
+    project_query_ids = []
+    for pid in project_ids:
+        if ObjectId.is_valid(pid):
+            project_query_ids.append(ObjectId(pid))
+        project_query_ids.append(pid)
+        
+    users_dict = {}
+    if user_query_ids:
+        for u in users_collection.find({"_id": {"$in": user_query_ids}}):
+            users_dict[str(u["_id"])] = u.get("name")
+            
+    tasks_dict = {}
+    if task_query_ids:
+        for t in tasks_collection.find({"_id": {"$in": task_query_ids}}):
+            tasks_dict[str(t["_id"])] = t.get("title")
+            
+    projects_dict = {}
+    if project_query_ids:
+        for p in projects_collection.find({"_id": {"$in": project_query_ids}}):
+            projects_dict[str(p["_id"])] = p.get("name")
+            
     evidence_list = []
-    for ev in task_evidence_collection.find(query).sort("submitted_at", -1):
+    for ev in raw_evidence:
         ev = serialize_doc(ev)
         
-        u_id = ev.get("uploaded_by")
-        if u_id:
-            u = users_collection.find_one({"_id": ObjectId(u_id) if ObjectId.is_valid(u_id) else u_id})
-            if u:
-                ev["user_name"] = u.get("name")
-                
-        t = tasks_collection.find_one({"_id": ObjectId(ev["task_id"])})
-        if t:
-            ev["task_title"] = t.get("title")
+        u_id_str = str(ev.get("uploaded_by", ""))
+        if u_id_str in users_dict:
+            ev["user_name"] = users_dict[u_id_str]
             
-        p_id = ev.get("project_id")
-        if p_id:
-            p = projects_collection.find_one({"_id": ObjectId(p_id) if ObjectId.is_valid(p_id) else p_id})
-            if p:
-                ev["project_name"] = p.get("name")
-                
+        t_id_str = str(ev.get("task_id", ""))
+        if t_id_str in tasks_dict:
+            ev["task_title"] = tasks_dict[t_id_str]
+            
+        p_id_str = str(ev.get("project_id", ""))
+        if p_id_str in projects_dict:
+            ev["project_name"] = projects_dict[p_id_str]
+            
         evidence_list.append(ev)
+        
     return jsonify(evidence_list)
