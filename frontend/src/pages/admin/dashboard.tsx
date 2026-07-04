@@ -20,6 +20,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Avatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import {
     getCounts,
     getUsersList,
     getRecentActivity,
@@ -40,6 +41,10 @@ export function AdminDashboard() {
     pending_evidence_count: 0
   })
   const [recentActivity, setRecentActivity] = useState<any[]>([])
+  const [appUsage, setAppUsage] = useState<any[]>([])
+  const [siteUsage, setSiteUsage] = useState<any[]>([])
+  const [productivityTrend, setProductivityTrend] = useState<any[]>([])
+  const [monitoringStatuses, setMonitoringStatuses] = useState<any[]>([])
 
   const loadData = () => {
     getCounts().then(data => setCounts(data))
