@@ -231,7 +231,7 @@ def _resolve_session_for_telemetry(doc, time_field="start_time", sessions_cache=
             return sess
     return None
 
-def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE", include_screenshots=True, compute_apps=True, compute_sites=True):
+def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE", include_screenshots=True, compute_apps=True, compute_sites=True, preloaded_summaries=None, state_doc=None):
     """
     Consolidated shared aggregation helper using central productivity engine.
     """
@@ -356,7 +356,7 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
         uid = target_user_ids[0]
         # Pass session_id if scope is SESSION
         engine_scope = session_id if normalized_scope == "SESSION" else normalized_scope
-        res = calculate_productivity(uid, engine_scope)
+        res = calculate_productivity(uid, engine_scope, preloaded_summaries=preloaded_summaries, state_doc=state_doc)
         
         apps_list = []
         if compute_apps:
@@ -412,7 +412,7 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
     
     for uid in target_user_ids:
         engine_scope = session_id if normalized_scope == "SESSION" else normalized_scope
-        user_res = calculate_productivity(uid, engine_scope)
+        user_res = calculate_productivity(uid, engine_scope, preloaded_summaries=preloaded_summaries, state_doc=state_doc)
         if user_res["tracked_minutes"] > 0:
             user_scores.append(user_res["productivity"])
             user_efficiencies.append(user_res["efficiency_ratio"])
@@ -472,43 +472,60 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
         "screenshot_count": len(screenshots_list)
     }
 
-def _build_user_summary(user):
+def _build_user_summary(user, preloaded_state=None, preloaded_latest_session=None, preloaded_summaries=None, preloaded_latest_app=None, preloaded_latest_site=None, is_batched=False):
     """Build full stats summary for a user."""
     uid = str(user["_id"])
-    stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE", include_screenshots=False)
+    stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE", include_screenshots=False, preloaded_summaries=preloaded_summaries, state_doc=preloaded_state)
 
-    all_sessions = _get_user_sessions(uid)
-    latest_session = all_sessions[0] if all_sessions else None
-    state_doc = monitoring_states_collection.find_one({"user_id": uid})
+    if is_batched:
+        latest_session = preloaded_latest_session
+        state_doc = preloaded_state
+    else:
+        all_sessions = _get_user_sessions(uid)
+        latest_session = all_sessions[0] if all_sessions else None
+        state_doc = monitoring_states_collection.find_one({"user_id": uid})
 
     # currentApp / currentSite
     current_app = "-"
     current_site = "-"
-    if latest_session:
-        sess_id = latest_session["_id"]
-        app_doc = applications_collection.find_one(
-            {"session_id": {"$in": [sess_id, str(sess_id)]}},
-            sort=[("start_time", -1)]
-        )
+    
+    if is_batched:
+        app_doc = preloaded_latest_app
+    else:
+        app_doc = None
+        if latest_session:
+            sess_id = latest_session["_id"]
+            app_doc = applications_collection.find_one(
+                {"session_id": {"$in": [sess_id, str(sess_id)]}},
+                sort=[("start_time", -1)]
+            )
         if not app_doc:
             app_doc = applications_collection.find_one(
                 {"user_id": uid},
                 sort=[("start_time", -1)]
             )
-        if app_doc:
-            current_app = app_doc.get("app_name") or app_doc.get("application_name") or "-"
+            
+    if app_doc:
+        current_app = app_doc.get("app_name") or app_doc.get("application_name") or "-"
 
-        site_doc = websites_collection.find_one(
-            {"session_id": {"$in": [sess_id, str(sess_id)]}},
-            sort=[("start_time", -1)]
-        )
+    if is_batched:
+        site_doc = preloaded_latest_site
+    else:
+        site_doc = None
+        if latest_session:
+            sess_id = latest_session["_id"]
+            site_doc = websites_collection.find_one(
+                {"session_id": {"$in": [sess_id, str(sess_id)]}},
+                sort=[("start_time", -1)]
+            )
         if not site_doc:
             site_doc = websites_collection.find_one(
                 {"user_id": uid},
                 sort=[("start_time", -1)]
             )
-        if site_doc:
-            current_site = site_doc.get("website") or site_doc.get("domain") or "-"
+            
+    if site_doc:
+        current_site = site_doc.get("website") or site_doc.get("domain") or "-"
 
     # Avatar color palette
     palette = [
@@ -745,9 +762,109 @@ def get_dashboard_counts():
 
 @reports_bp.route("/user-summary", methods=["GET"])
 def get_user_summary():
+    from config.productivity_rules import _resolve_user_ids
+    
+    users = list(users_collection.find())
+    all_uids_set = set()
+    for u in users:
+        for rid in _resolve_user_ids(str(u["_id"])):
+            all_uids_set.add(rid)
+    
+    all_uids = list(all_uids_set)
+    
+    # 1. Fetch States
+    states_list = list(monitoring_states_collection.find({"user_id": {"$in": all_uids}}))
+    states_dict = {s.get("user_id"): s for s in states_list if s.get("user_id")}
+    
+    # 2. Fetch Summaries
+    summaries_list = list(daily_summaries_collection.find({"user_id": {"$in": all_uids}}))
+    summaries_dict = {}
+    for s in summaries_list:
+        if s.get("user_id") and s.get("date"):
+            key = f"{s['user_id']}_{s['date']}"
+            summaries_dict[key] = s
+            
+    # 3. Fetch Sessions (and extract latest session per user)
+    all_sessions = list(sessions_collection.find({"user_id": {"$in": all_uids}}).sort("start_time", -1))
+    latest_sessions_dict = {}
+    latest_session_ids = set()
+    for sess in all_sessions:
+        uid = sess.get("user_id")
+        if uid and uid not in latest_sessions_dict:
+            latest_sessions_dict[uid] = sess
+            latest_session_ids.add(sess["_id"])
+            latest_session_ids.add(str(sess["_id"]))
+            
+    latest_sess_ids_list = list(latest_session_ids)
+    
+    # 4. Fetch Applications and Websites
+    apps_list = []
+    if latest_sess_ids_list:
+        apps_list = list(applications_collection.find({"session_id": {"$in": latest_sess_ids_list}}).sort("start_time", -1))
+    latest_app_dict = {}
+    for app in apps_list:
+        uid = app.get("user_id")
+        if uid and uid not in latest_app_dict:
+            latest_app_dict[uid] = app
+            
+    users_missing_app = [u for u in all_uids if u not in latest_app_dict]
+    if users_missing_app:
+        fallback_apps = list(applications_collection.find({"user_id": {"$in": users_missing_app}}).sort("start_time", -1))
+        for app in fallback_apps:
+            uid = app.get("user_id")
+            if uid and uid not in latest_app_dict:
+                latest_app_dict[uid] = app
+                
+    sites_list = []
+    if latest_sess_ids_list:
+        sites_list = list(websites_collection.find({"session_id": {"$in": latest_sess_ids_list}}).sort("start_time", -1))
+    latest_site_dict = {}
+    for site in sites_list:
+        uid = site.get("user_id")
+        if uid and uid not in latest_site_dict:
+            latest_site_dict[uid] = site
+            
+    users_missing_site = [u for u in all_uids if u not in latest_site_dict]
+    if users_missing_site:
+        fallback_sites = list(websites_collection.find({"user_id": {"$in": users_missing_site}}).sort("start_time", -1))
+        for site in fallback_sites:
+            uid = site.get("user_id")
+            if uid and uid not in latest_site_dict:
+                latest_site_dict[uid] = site
+
     summaries = []
-    for user in users_collection.find():
-        summaries.append(_build_user_summary(user))
+    for user in users:
+        uid = str(user["_id"])
+        
+        # We must check fallback uids too, like legacy ints if needed, 
+        # but the dictionaries are populated by whatever `user_id` was in the document.
+        # Let's check against all resolved IDs for this user
+        resolved = _resolve_user_ids(uid)
+        
+        preloaded_state = None
+        preloaded_latest_session = None
+        preloaded_latest_app = None
+        preloaded_latest_site = None
+        
+        for rid in resolved:
+            if not preloaded_state and rid in states_dict:
+                preloaded_state = states_dict[rid]
+            if not preloaded_latest_session and rid in latest_sessions_dict:
+                preloaded_latest_session = latest_sessions_dict[rid]
+            if not preloaded_latest_app and rid in latest_app_dict:
+                preloaded_latest_app = latest_app_dict[rid]
+            if not preloaded_latest_site and rid in latest_site_dict:
+                preloaded_latest_site = latest_site_dict[rid]
+
+        summaries.append(_build_user_summary(
+            user, 
+            preloaded_state=preloaded_state,
+            preloaded_latest_session=preloaded_latest_session,
+            preloaded_summaries=summaries_dict,
+            preloaded_latest_app=preloaded_latest_app,
+            preloaded_latest_site=preloaded_latest_site,
+            is_batched=True
+        ))
     return jsonify(summaries)
 
 
