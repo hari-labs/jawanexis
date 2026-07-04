@@ -16,7 +16,8 @@ from database.mongodb import (
     tasks_collection,
     task_evidence_collection,
     monitoring_states_collection,
-    audit_logs_collection
+    audit_logs_collection,
+    daily_summaries_collection
 )
 from config.productivity_rules import (
     PRODUCTIVE_APPS,
@@ -26,7 +27,7 @@ from config.productivity_rules import (
     classify_app,
     classify_website,
     calculate_productivity_score,
-    is_browser
+    is_browser,
 )
 
 reports_bp = Blueprint(
