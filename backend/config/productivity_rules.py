@@ -666,7 +666,7 @@ def _empty_summary(user_id, scope=None):
         "unproductive_sites": []
     }
 
-def calculate_productivity(user_id, scope, session_id=None):
+def calculate_productivity(user_id, scope, session_id=None, preloaded_summaries=None, state_doc=None):
     from database.mongodb import sessions_collection, applications_collection, websites_collection, monitoring_states_collection
 
     resolved_ids = _resolve_user_ids(user_id)
@@ -723,7 +723,8 @@ def calculate_productivity(user_id, scope, session_id=None):
         session_apps = list(applications_collection.find({"session_id": {"$in": [sid, str(sid)]}}))
         session_sites = list(websites_collection.find({"session_id": {"$in": [sid, str(sid)]}}))
         
-        state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
+        if state_doc is None:
+            state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
         prod_sec, neutral_sec, unprod_sec, idle_sec, locked_sec, total_seconds = _resolve_session_telemetry_details_internal(
             target_session, session_apps, session_sites, state_doc=state_doc
         )
@@ -840,21 +841,29 @@ def calculate_productivity(user_id, scope, session_id=None):
     if not dates:
         return _empty_summary(user_id, scope)
 
-    state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
+    if state_doc is None:
+        state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
     
-    preloaded_summaries = {}
-    past_dates = [d for d in dates if d != today_str]
-    if past_dates:
-        from database.mongodb import db
-        daily_summaries_collection = db["daily_summaries"]
-        cursor = daily_summaries_collection.find({"user_id": str(user_id), "date": {"$in": past_dates}})
-        for doc in cursor:
-            doc.pop("_id", None)
-            preloaded_summaries[doc["date"]] = doc
+    user_id_str = str(user_id)
+    preloaded_summaries_user = {}
+    
+    if preloaded_summaries is not None:
+        for d in dates:
+            if (user_id_str, d) in preloaded_summaries:
+                preloaded_summaries_user[d] = preloaded_summaries[(user_id_str, d)]
+    else:
+        past_dates = [d for d in dates if d != today_str]
+        if past_dates:
+            from database.mongodb import db
+            daily_summaries_collection = db["daily_summaries"]
+            cursor = daily_summaries_collection.find({"user_id": user_id_str, "date": {"$in": past_dates}})
+            for doc in cursor:
+                doc.pop("_id", None)
+                preloaded_summaries_user[doc["date"]] = doc
 
     summaries = []
     for d_str in dates:
-        summ = get_daily_summary(user_id, d_str, preloaded_summaries=preloaded_summaries, state_doc=state_doc)
+        summ = get_daily_summary(user_id, d_str, preloaded_summaries=preloaded_summaries_user, state_doc=state_doc)
         summaries.append(summ)
         
     combined = {

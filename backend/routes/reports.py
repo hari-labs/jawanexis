@@ -1505,6 +1505,8 @@ def get_productivity_trend():
     today_local = datetime.utcnow() + timedelta(minutes=330)
     dates = [(today_local - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
     dates.reverse()
+    today_str = today_local.strftime("%Y-%m-%d")
+    past_dates = [d for d in dates if d != today_str]
 
     caller_role = "intern"
     if caller_id:
@@ -1523,13 +1525,35 @@ def get_productivity_trend():
         all_users = list(users_collection.find({}, {"_id": 1}))
         target_uids = [str(u["_id"]) for u in all_users]
 
+    # --- BATCH PRELOAD ---
+    from database.mongodb import daily_summaries_collection
+    
+    states = list(monitoring_states_collection.find({"user_id": {"$in": target_uids}}))
+    states_cache = {str(s["user_id"]): s for s in states}
+
+    preloaded_summaries = {}
+    if past_dates:
+        cursor = daily_summaries_collection.find({
+            "user_id": {"$in": target_uids},
+            "date": {"$in": past_dates}
+        })
+        for doc in cursor:
+            doc.pop("_id", None)
+            preloaded_summaries[(str(doc["user_id"]), doc["date"])] = doc
+    # ---------------------
+
     from config.productivity_rules import calculate_productivity
 
     trend = []
     for date_str in dates:
         day_scores = []
         for uid in target_uids:
-            res = calculate_productivity(uid, date_str)
+            res = calculate_productivity(
+                uid, 
+                date_str, 
+                preloaded_summaries=preloaded_summaries, 
+                state_doc=states_cache.get(uid)
+            )
             if res["tracked_minutes"] > 0:
                 day_scores.append(res["productivity"])
                 
@@ -1563,21 +1587,47 @@ def get_work_time_trend():
     today_local = datetime.utcnow() + timedelta(minutes=330)
     dates = [(today_local - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(num_days)]
     dates.reverse()
+    today_str = today_local.strftime("%Y-%m-%d")
+    past_dates = [d for d in dates if d != today_str]
+
+    if employee_id:
+        target_uids = [employee_id]
+    else:
+        all_users = list(users_collection.find({}, {"_id": 1}))
+        target_uids = [str(u["_id"]) for u in all_users]
+
+    # --- BATCH PRELOAD ---
+    from database.mongodb import daily_summaries_collection
+    
+    states = list(monitoring_states_collection.find({"user_id": {"$in": target_uids}}))
+    states_cache = {str(s["user_id"]): s for s in states}
+
+    preloaded_summaries = {}
+    if past_dates:
+        cursor = daily_summaries_collection.find({
+            "user_id": {"$in": target_uids},
+            "date": {"$in": past_dates}
+        })
+        for doc in cursor:
+            doc.pop("_id", None)
+            preloaded_summaries[(str(doc["user_id"]), doc["date"])] = doc
+    # ---------------------
 
     from config.productivity_rules import calculate_productivity
 
     trend = []
     for date_str in dates:
-        if employee_id:
-            res = calculate_productivity(employee_id, date_str)
-            work_hours = round(res["active_minutes"] / 60.0, 1)
-        else:
-            all_users = list(users_collection.find({}, {"_id": 1}))
-            total_active = 0.0
-            for u in all_users:
-                res = calculate_productivity(str(u["_id"]), date_str)
-                total_active += res["active_minutes"]
-            work_hours = round(total_active / 60.0, 1)
+        total_active = 0.0
+        for uid in target_uids:
+            res = calculate_productivity(
+                uid, 
+                date_str, 
+                preloaded_summaries=preloaded_summaries, 
+                state_doc=states_cache.get(uid)
+            )
+            total_active += res["active_minutes"]
+        
+        work_hours = round(total_active / 60.0, 1)
 
         try:
             day_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a")
