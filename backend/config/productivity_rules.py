@@ -365,7 +365,7 @@ def _resolve_session_telemetry_details_internal(s, session_apps, session_sites, 
     
     return prod_sec, neutral_sec, unprod_sec, idle_sec, locked_seconds, total_seconds
 
-def _calculate_daily_telemetry_raw(user_id, date_str):
+def _calculate_daily_telemetry_raw(user_id, date_str, state_doc=None):
     from database.mongodb import sessions_collection, applications_collection, websites_collection, monitoring_states_collection
     
     resolved_ids = _resolve_user_ids(user_id)
@@ -463,7 +463,8 @@ def _calculate_daily_telemetry_raw(user_id, date_str):
     total_locked_sec = 0.0
     total_sec = 0.0
     
-    state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
+    if state_doc is None:
+        state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
     for s in target_sessions:
         sid_str = str(s["_id"])
         session_apps = preloaded_apps_for_sessions.get(sid_str, [])
@@ -591,7 +592,7 @@ def _calculate_daily_telemetry_raw(user_id, date_str):
         "unproductive_sites": unproductive_sites
     }
 
-def get_daily_summary(user_id, date_str):
+def get_daily_summary(user_id, date_str, preloaded_summaries=None, state_doc=None):
     from database.mongodb import db
     daily_summaries_collection = db["daily_summaries"]
     
@@ -600,27 +601,48 @@ def get_daily_summary(user_id, date_str):
     
     user_id_str = str(user_id)
     
+    try:
+        from flask import has_app_context, g
+        use_g = has_app_context()
+    except ImportError:
+        use_g = False
+        
+    if use_g:
+        if not hasattr(g, 'daily_summaries_cache'):
+            g.daily_summaries_cache = {}
+        cache_key = f"{user_id_str}:{date_str}"
+        if cache_key in g.daily_summaries_cache:
+            return g.daily_summaries_cache[cache_key]
+            
+    def _return_with_cache(data):
+        if use_g:
+            g.daily_summaries_cache[cache_key] = data
+        return data
+
     if date_str == today_str:
-        summary = _calculate_daily_telemetry_raw(user_id, date_str)
+        summary = _calculate_daily_telemetry_raw(user_id, date_str, state_doc=state_doc)
         daily_summaries_collection.update_one(
             {"user_id": user_id_str, "date": date_str},
             {"$set": summary},
             upsert=True
         )
-        return summary
+        return _return_with_cache(summary)
+        
+    if preloaded_summaries is not None and date_str in preloaded_summaries:
+        return _return_with_cache(preloaded_summaries[date_str])
         
     cached = daily_summaries_collection.find_one({"user_id": user_id_str, "date": date_str})
     if cached:
         cached.pop("_id", None)
-        return cached
+        return _return_with_cache(cached)
         
-    summary = _calculate_daily_telemetry_raw(user_id, date_str)
+    summary = _calculate_daily_telemetry_raw(user_id, date_str, state_doc=state_doc)
     daily_summaries_collection.update_one(
         {"user_id": user_id_str, "date": date_str},
         {"$set": summary},
         upsert=True
     )
-    return summary
+    return _return_with_cache(summary)
 
 def _empty_summary(user_id, scope=None):
     return {
@@ -818,9 +840,21 @@ def calculate_productivity(user_id, scope, session_id=None):
     if not dates:
         return _empty_summary(user_id, scope)
 
+    state_doc = monitoring_states_collection.find_one({"user_id": str(user_id)})
+    
+    preloaded_summaries = {}
+    past_dates = [d for d in dates if d != today_str]
+    if past_dates:
+        from database.mongodb import db
+        daily_summaries_collection = db["daily_summaries"]
+        cursor = daily_summaries_collection.find({"user_id": str(user_id), "date": {"$in": past_dates}})
+        for doc in cursor:
+            doc.pop("_id", None)
+            preloaded_summaries[doc["date"]] = doc
+
     summaries = []
     for d_str in dates:
-        summ = get_daily_summary(user_id, d_str)
+        summ = get_daily_summary(user_id, d_str, preloaded_summaries=preloaded_summaries, state_doc=state_doc)
         summaries.append(summ)
         
     combined = {
