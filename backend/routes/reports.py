@@ -231,7 +231,7 @@ def _resolve_session_for_telemetry(doc, time_field="start_time", sessions_cache=
             return sess
     return None
 
-def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE", include_screenshots=True):
+def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTERN_SCOPE", include_screenshots=True, compute_apps=True, compute_sites=True):
     """
     Consolidated shared aggregation helper using central productivity engine.
     """
@@ -359,21 +359,23 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
         res = calculate_productivity(uid, engine_scope)
         
         apps_list = []
-        for app in res["productive_apps"] + res["neutral_apps"] + res["unproductive_apps"]:
-            apps_list.append({
-                "name": app["name"],
-                "duration": app["duration"],
-                "percentage": app["percentage"],
-                "category": "distracting" if app["category"] == "unproductive" else app["category"]
-            })
+        if compute_apps:
+            for app in res["productive_apps"] + res["neutral_apps"] + res["unproductive_apps"]:
+                apps_list.append({
+                    "name": app["name"],
+                    "duration": app["duration"],
+                    "percentage": app["percentage"],
+                    "category": "distracting" if app["category"] == "unproductive" else app["category"]
+                })
         sites_list = []
-        for site in res["productive_sites"] + res["neutral_sites"] + res["unproductive_sites"]:
-            sites_list.append({
-                "domain": site["domain"],
-                "duration": site["duration"],
-                "percentage": site["percentage"],
-                "category": "distracting" if site["category"] == "unproductive" else site["category"]
-            })
+        if compute_sites:
+            for site in res["productive_sites"] + res["neutral_sites"] + res["unproductive_sites"]:
+                sites_list.append({
+                    "domain": site["domain"],
+                    "duration": site["duration"],
+                    "percentage": site["percentage"],
+                    "category": "distracting" if site["category"] == "unproductive" else site["category"]
+                })
 
         return {
             "tracked_mins": round(res["tracked_minutes"], 1),
@@ -434,22 +436,24 @@ def aggregate_telemetry(user_id, scope, session_id=None, visibility_scope="INTER
     activity_ratio = round(sum(user_activities) / len(user_activities), 4) if user_activities else 0.0
     
     apps_list = []
-    total_app_sec = sum(app_durations.values())
-    for name, dur in app_durations.items():
-        pct = round((dur / total_app_sec) * 100) if total_app_sec > 0 else 0
-        cat = classify_app(name)
-        category = "distracting" if cat == "unproductive" else cat
-        apps_list.append({"name": name, "duration": dur, "percentage": pct, "category": category})
-    apps_list.sort(key=lambda x: x["duration"], reverse=True)
+    if compute_apps:
+        total_app_sec = sum(app_durations.values())
+        for name, dur in app_durations.items():
+            pct = round((dur / total_app_sec) * 100) if total_app_sec > 0 else 0
+            cat = classify_app(name)
+            category = "distracting" if cat == "unproductive" else cat
+            apps_list.append({"name": name, "duration": dur, "percentage": pct, "category": category})
+        apps_list.sort(key=lambda x: x["duration"], reverse=True)
     
     sites_list = []
-    total_site_sec = sum(site_durations.values())
-    for domain, dur in site_durations.items():
-        pct = round((dur / total_site_sec) * 100) if total_site_sec > 0 else 0
-        cat = classify_website(domain)
-        category = "distracting" if cat == "unproductive" else cat
-        sites_list.append({"domain": domain, "duration": dur, "percentage": pct, "category": category})
-    sites_list.sort(key=lambda x: x["duration"], reverse=True)
+    if compute_sites:
+        total_site_sec = sum(site_durations.values())
+        for domain, dur in site_durations.items():
+            pct = round((dur / total_site_sec) * 100) if total_site_sec > 0 else 0
+            cat = classify_website(domain)
+            category = "distracting" if cat == "unproductive" else cat
+            sites_list.append({"domain": domain, "duration": dur, "percentage": pct, "category": category})
+        sites_list.sort(key=lambda x: x["duration"], reverse=True)
 
     return {
         "tracked_mins": round(total_tracked_mins, 1),
@@ -722,28 +726,36 @@ def get_user_summary():
 # ─────────────────────────────────────────────────
 
 @reports_bp.route("/intern-summary/<user_id>", methods=["GET"])
-def get_intern_summary(user_id, dashboard=False):
+def get_intern_summary(user_id, dashboard=False, activity_page=False):
     try:
         user = users_collection.find_one({"_id": ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id})
         if not user:
             return jsonify({"error": "User not found"}), 404
 
         uid = str(user["_id"])
+        
+        from flask import request
+        if request and not dashboard:
+            # If called directly as an API endpoint, it's the activity page context
+            if getattr(request, "endpoint", None) == "reports.get_intern_summary":
+                activity_page = True
+
         state_doc = monitoring_states_collection.find_one({"user_id": uid})
         all_sessions = _get_user_sessions(uid)
-        session_id_filter = request.args.get("session_id")
+        session_id_filter = request.args.get("session_id") if request else None
 
+        include_shots = not dashboard
         if session_id_filter in ("today", "TODAY_SCOPE"):
-            stats = aggregate_telemetry(uid, "TODAY_SCOPE")
+            stats = aggregate_telemetry(uid, "TODAY_SCOPE", include_screenshots=include_shots)
         elif session_id_filter in ("week", "WEEK_SCOPE"):
-            stats = aggregate_telemetry(uid, "WEEK_SCOPE")
+            stats = aggregate_telemetry(uid, "WEEK_SCOPE", include_screenshots=include_shots)
         elif session_id_filter and session_id_filter not in ("all", "ALL_TIME_SCOPE", ""):
-            stats = aggregate_telemetry(uid, "SESSION_SCOPE", session_id=session_id_filter)
+            stats = aggregate_telemetry(uid, "SESSION_SCOPE", session_id=session_id_filter, include_screenshots=include_shots)
         else:
-            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE")
+            stats = aggregate_telemetry(uid, "ALL_TIME_SCOPE", include_screenshots=include_shots)
 
         # Always calculate today's telemetry stats for the today fields
-        today_stats = aggregate_telemetry(uid, "TODAY_SCOPE")
+        today_stats = aggregate_telemetry(uid, "TODAY_SCOPE", include_screenshots=include_shots)
 
         apps_list = stats["apps"]
         sites_list = stats["sites"]
@@ -780,13 +792,36 @@ def get_intern_summary(user_id, dashboard=False):
             user_oids.append(ObjectId(uid))
 
         role = user.get("role", "intern").lower()
-        if role in ["team_lead", "team lead"]:
-            projects = list(projects_collection.find({"lead_id": {"$in": user_oids}}))
-        else:
-            projects = list(projects_collection.find({"member_ids": {"$in": user_oids}}))
         
-        user_tasks = list(tasks_collection.find({"assigned_to": {"$in": user_oids}}))
-        completed_tasks_count = sum(1 for t in user_tasks if t.get("status") in ("Completed", "Approved", "completed", "approved"))
+        projects_list = []
+        project_count = 0
+        task_count = 0
+        completed_tasks_count = 0
+
+        if activity_page:
+            pass
+        elif dashboard:
+            if role in ["team_lead", "team lead"]:
+                project_count = projects_collection.count_documents({"lead_id": {"$in": user_oids}})
+            else:
+                project_count = projects_collection.count_documents({"member_ids": {"$in": user_oids}})
+            
+            task_count = tasks_collection.count_documents({"assigned_to": {"$in": user_oids}})
+            completed_tasks_count = tasks_collection.count_documents({
+                "assigned_to": {"$in": user_oids},
+                "status": {"$in": ["Completed", "Approved", "completed", "approved"]}
+            })
+        else:
+            if role in ["team_lead", "team lead"]:
+                projects_full = list(projects_collection.find({"lead_id": {"$in": user_oids}}))
+            else:
+                projects_full = list(projects_collection.find({"member_ids": {"$in": user_oids}}))
+            projects_list = [{"id": str(p["_id"]), "name": p.get("name", "")} for p in projects_full]
+            project_count = len(projects_full)
+            
+            user_tasks = list(tasks_collection.find({"assigned_to": {"$in": user_oids}}))
+            task_count = len(user_tasks)
+            completed_tasks_count = sum(1 for t in user_tasks if t.get("status") in ("Completed", "Approved", "completed", "approved"))
 
         # ── Session history ────────────────────────
         serialized_sessions = []
@@ -949,9 +984,9 @@ def get_intern_summary(user_id, dashboard=False):
             "app_count": len(apps_list),
             "site_count": len(sites_list),
             "sessions": serialized_sessions,
-            "project_count": len(projects),
-            "task_count": len(user_tasks),
-            "projects": [{"id": str(p["_id"]), "name": p.get("name", "")} for p in projects],
+            "project_count": project_count,
+            "task_count": task_count,
+            "projects": projects_list,
         }
         if team_stats:
             summary["team_stats"] = team_stats
@@ -1345,7 +1380,7 @@ def get_app_usage():
             vis_scope = "ADMIN_SCOPE"
             target_uid = caller_id
 
-    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False)
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False, compute_sites=False)
     
     # Format and sort
     apps_list = []
@@ -1393,7 +1428,7 @@ def get_site_usage():
             vis_scope = "ADMIN_SCOPE"
             target_uid = caller_id
 
-    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False)
+    stats = aggregate_telemetry(target_uid, "ALL_TIME_SCOPE", visibility_scope=vis_scope, include_screenshots=False, compute_apps=False)
     
     # Format and sort
     sites_list = []
