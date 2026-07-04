@@ -713,6 +713,36 @@ def get_recent_activity():
 # User Summary (all users)
 # ─────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────
+# Dashboard Counts
+# ─────────────────────────────────────────────────
+
+@reports_bp.route("/counts", methods=["GET"])
+def get_dashboard_counts():
+    try:
+        intern_count = users_collection.count_documents({"role": {"$in": ["intern", "user"]}})
+        
+        team_lead_count = users_collection.count_documents({
+            "role": {"$in": ["team_lead", "team lead", "teamlead"]}
+        })
+        
+        project_count = projects_collection.count_documents({})
+        pending_task_count = tasks_collection.count_documents({"status": {"$in": ["Pending", "pending", "todo"]}})
+        pending_evidence_count = task_evidence_collection.count_documents({"status": "pending"})
+
+        return jsonify({
+            "intern_count": intern_count,
+            "team_lead_count": team_lead_count,
+            "project_count": project_count,
+            "pending_task_count": pending_task_count,
+            "pending_evidence_count": pending_evidence_count
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @reports_bp.route("/user-summary", methods=["GET"])
 def get_user_summary():
     summaries = []

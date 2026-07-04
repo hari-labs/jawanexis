@@ -118,6 +118,11 @@ export async function getPublicStats() {
     return await response.json()
 }
 
+export async function getCounts() {
+    const response = await authFetch(`${BASE_URL}/reports/counts`)
+    return await response.json()
+}
+
 export async function getInternSummary(id: string, sessionId?: string, options?: RequestInit) {
     const url = sessionId && sessionId !== "all"
         ? `${BASE_URL}/reports/intern-summary/${id}?session_id=${sessionId}`

@@ -20,39 +20,34 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Avatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import {
-    getUsers,
+    getCounts,
+    getUsersList,
     getRecentActivity,
     getAppUsage,
     getSiteUsage,
     categoryColor,
     getProductivityTrend,
-    getAllMonitoringStatus,
-    getProjects,
-    getAllTasks,
-    getAllEvidence
+    getAllMonitoringStatus
 } from "@/services/api"
 
 export function AdminDashboard() {
   const [users, setUsers] = useState<any[]>([])
+  const [counts, setCounts] = useState({
+    intern_count: 0,
+    team_lead_count: 0,
+    project_count: 0,
+    pending_task_count: 0,
+    pending_evidence_count: 0
+  })
   const [recentActivity, setRecentActivity] = useState<any[]>([])
-  const [appUsage, setAppUsage] = useState<any[]>([])
-  const [siteUsage, setSiteUsage] = useState<any[]>([])
-  const [productivityTrend, setProductivityTrend] = useState<any[]>([])
-  const [monitoringStatuses, setMonitoringStatuses] = useState<any[]>([])
-  const [projects, setProjects] = useState<any[]>([])
-  const [tasks, setTasks] = useState<any[]>([])
-  const [evidenceList, setEvidenceList] = useState<any[]>([])
 
   const loadData = () => {
-    getUsers().then(data => setUsers(data))
+    getCounts().then(data => setCounts(data))
+    getUsersList().then(data => setUsers(data))
     getRecentActivity().then(data => setRecentActivity(data))
     getAppUsage().then(data => setAppUsage(data))
     getSiteUsage().then(data => setSiteUsage(data))
     getProductivityTrend().then(data => setProductivityTrend(data))
-    getProjects().then(data => setProjects(data))
-    getAllTasks().then(data => setTasks(data))
-    getAllEvidence().then(data => setEvidenceList(data))
     
     getAllMonitoringStatus()
       .then(data => setMonitoringStatuses(data))
@@ -86,8 +81,8 @@ export function AdminDashboard() {
     return () => clearInterval(ticker)
   }, [])
 
-  const internsCount = users.filter((u) => u.role.toLowerCase() === "intern").length
-  const teamLeadsCount = users.filter((u) => u.role.toLowerCase() === "team_lead" || u.role.toLowerCase() === "team lead" || u.role.toLowerCase() === "teamlead").length
+  const internsCount = counts.intern_count || 0
+  const teamLeadsCount = counts.team_lead_count || 0
   
   const onlineCount = monitoringStatuses.filter(s => s.agent_online).length
   const offlineCount = monitoringStatuses.filter(s => !s.agent_online).length
@@ -124,15 +119,15 @@ export function AdminDashboard() {
 
       {/* Persistent Monitoring Counters */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard label="Total Projects" value={String(projects.length)} icon={FolderKanban} />
+        <StatCard label="Total Projects" value={String(counts.project_count || 0)} icon={FolderKanban} />
         <StatCard label="Total Team Leads" value={String(teamLeadsCount)} icon={Users} />
         <StatCard label="Total Interns" value={String(internsCount)} icon={Users} />
         <StatCard label="Online Users" value={String(onlineCount)} icon={Activity} />
         <StatCard label="Offline Users" value={String(offlineCount)} icon={ShieldAlert} />
         <StatCard label="Running Sessions" value={String(runningCount)} icon={Gauge} />
         <StatCard label="Paused Sessions" value={String(pausedCount)} icon={Coffee} />
-        <StatCard label="Pending Reviews" value={String(evidenceList.filter(e => e.status === "pending").length)} icon={ClipboardCheck} />
-        <StatCard label="Pending Tasks" value={String(tasks.filter(t => t.status === "Pending").length)} icon={ListTodo} />
+        <StatCard label="Pending Reviews" value={String(counts.pending_evidence_count || 0)} icon={ClipboardCheck} />
+        <StatCard label="Pending Tasks" value={String(counts.pending_task_count || 0)} icon={ListTodo} />
       </div>
 
       {/* Live Monitoring Dashboard */}
@@ -282,42 +277,13 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
 
-        {/* Recent Deliverables (Evidence) */}
-        <Card className="lg:col-span-1">
+        {/* Recent Deliverables (Evidence) - Temporarily hidden as data is no longer loaded on start */}
+        <Card className="lg:col-span-1 hidden">
           <CardHeader>
             <CardTitle>Recent deliverables</CardTitle>
             <CardDescription>Latest task evidence uploads</CardDescription>
           </CardHeader>
           <CardContent className="max-h-[260px] overflow-y-auto pr-1">
-            <ul className="flex flex-col gap-4">
-              {evidenceList.slice(0, 6).map((ev) => (
-                <li key={ev._id} className="flex items-start gap-2 text-xs">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-primary/10 text-primary">
-                    <FileText className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-foreground truncate">{ev.task_title || "Deliverable"}</p>
-                    <p className="text-muted-foreground truncate">By {ev.user_name || "Intern"} ({ev.project_name || "Project"})</p>
-                    {ev.file_path && (
-                      <a
-                        href={`${BASE_URL}/${ev.file_path}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-0.5 text-[10px] font-bold text-primary hover:underline mt-0.5"
-                      >
-                        <Download className="h-3 w-3" /> Download
-                      </a>
-                    )}
-                  </div>
-                  <Badge variant={ev.status === "approved" ? "success" : ev.status === "rejected" ? "danger" : "warning"} className="text-[9px] px-1.5 py-0 capitalize">
-                    {ev.status}
-                  </Badge>
-                </li>
-              ))}
-              {evidenceList.length === 0 && (
-                <p className="text-muted-foreground italic text-center py-10">No recent deliverables.</p>
-              )}
-            </ul>
           </CardContent>
         </Card>
       </div>
