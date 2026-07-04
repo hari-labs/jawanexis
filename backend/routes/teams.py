@@ -51,13 +51,71 @@ def get_team_members(team_lead_id):
 
 @teams_bp.route("/overview", methods=["GET"])
 def get_teams_overview():
+    projects = list(projects_collection.find())
+    
+    # --- BATCH PRELOAD ---
+    all_uids_set = set()
+    for p in projects:
+        lead_id = p.get("lead_id")
+        if lead_id:
+            all_uids_set.add(str(lead_id))
+        for mid in p.get("member_ids", []):
+            if mid:
+                all_uids_set.add(str(mid))
+                
+    all_uids = list(all_uids_set)
+    
+    # 1. Users Dict
+    from database.mongodb import monitoring_states_collection, db
+    
+    user_query_ids = []
+    for u in all_uids:
+        user_query_ids.append(u)
+        if ObjectId.is_valid(u):
+            user_query_ids.append(ObjectId(u))
+            
+    users_cursor = users_collection.find({"_id": {"$in": user_query_ids}})
+    users_dict = {}
+    for u in users_cursor:
+        users_dict[str(u["_id"])] = u
+        if u.get("user_id"):
+            users_dict[str(u.get("user_id"))] = u
+    
+    # 2. States Dict
+    states_cursor = monitoring_states_collection.find({"user_id": {"$in": all_uids}})
+    states_dict = {str(s["user_id"]): s for s in states_cursor}
+    
+    # 3. Summaries Dict
+    daily_summaries_collection = db["daily_summaries"]
+    from datetime import datetime, timedelta
+    today_local = datetime.utcnow() + timedelta(minutes=330)
+    today_str = today_local.strftime("%Y-%m-%d")
+    
+    summaries_cursor = daily_summaries_collection.find({"user_id": {"$in": all_uids}})
+    preloaded_summaries = {}
+    
+    for doc in summaries_cursor:
+        doc.pop("_id", None)
+        preloaded_summaries[(str(doc["user_id"]), doc["date"])] = doc
+
+    from config.productivity_rules import calculate_productivity
+    
     overview = []
-    for p in projects_collection.find():
+    for p in projects:
         p_id = str(p["_id"])
         
-        lead_id = p.get("lead_id")
-        lead = resolve_user(lead_id)
-        if not lead:
+        lead_id = str(p.get("lead_id")) if p.get("lead_id") else None
+        lead_user = users_dict.get(lead_id) if lead_id else None
+        
+        if lead_user:
+            lead = {
+                "id": str(lead_user["_id"]),
+                "name": lead_user.get("name", "Unknown"),
+                "email": lead_user.get("email", ""),
+                "role": lead_user.get("role", "intern"),
+                "avatarColor": lead_user.get("avatarColor", "")
+            }
+        else:
             lead = {"id": "", "name": "Unassigned", "email": ""}
             
         member_ids = p.get("member_ids", [])
@@ -69,15 +127,23 @@ def get_teams_overview():
         total_work_hours = 0
         
         for mid in member_ids:
-            user = None
-            if ObjectId.is_valid(mid):
-                user = users_collection.find_one({"_id": ObjectId(mid)})
-            if not user:
-                user = users_collection.find_one({"_id": mid})
-                
+            mid_str = str(mid)
+            user = users_dict.get(mid_str)
+            
             if user:
-                from config.productivity_rules import calculate_productivity
-                res = calculate_productivity(str(user["_id"]), "all_time")
+                user_id_str = str(user["_id"])
+                
+                # Reconstruct historical dates from cached keys, skipping today if it was cached
+                user_dates = [k[1] for k in preloaded_summaries.keys() if k[0] == user_id_str and k[1] != today_str]
+                user_dates.append(today_str)
+                
+                res = calculate_productivity(
+                    user_id_str, 
+                    user_dates, 
+                    preloaded_summaries=preloaded_summaries, 
+                    state_doc=states_dict.get(user_id_str)
+                )
+                
                 prod = float(res["productivity"])
                 hours = round(res["active_minutes"] / 60.0, 1)
                     
@@ -85,7 +151,7 @@ def get_teams_overview():
                 total_work_hours += hours
                 
                 members.append({
-                    "id": str(user["_id"]),
+                    "id": user_id_str,
                     "name": user.get("name", "Unknown"),
                     "email": user.get("email", ""),
                     "status": user.get("status", "offline"),
