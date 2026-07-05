@@ -2,6 +2,8 @@ from flask import Blueprint, request, jsonify
 from database.mongodb import users_collection, sessions_collection, monitoring_states_collection, devices_collection
 from bson import ObjectId
 from datetime import datetime, timezone
+import threading
+import time
 
 monitoring_bp = Blueprint("monitoring", __name__, url_prefix="/monitoring")
 
@@ -49,13 +51,7 @@ def check_agent_online(state_doc):
     if dt is None:
         return False
     diff = (_utcnow() - dt).total_seconds()
-    is_online = diff < 30
-    if is_online != state_doc.get("agent_online", False):
-        monitoring_states_collection.update_one(
-            {"_id": state_doc["_id"]},
-            {"$set": {"agent_online": is_online}}
-        )
-    return is_online
+    return diff < 30
 
 def _auto_reset_stuck_state(state_doc):
     """
@@ -317,7 +313,6 @@ def get_all_status():
         elapsed_seconds = 0
         
         if state_doc:
-            state_doc = _auto_reset_stuck_state(state_doc)
             is_online = check_agent_online(state_doc)
             state = state_doc.get("current_state", "IDLE")
             session_id = state_doc.get("current_session_id")
@@ -361,9 +356,6 @@ def get_status(user_id):
             "agent_online": False,
             "last_seen": None
         })
-
-    # Auto-reset if stuck in transition state with no heartbeat
-    state_doc = _auto_reset_stuck_state(state_doc)
 
     # Re-evaluate online status dynamically
     is_online = check_agent_online(state_doc)
@@ -610,3 +602,27 @@ def assign_device(device_uuid):
         )
         
     return jsonify({"success": True})
+
+# ─────────────────────────────────────────────────
+# Background Maintenance Daemon
+# ─────────────────────────────────────────────────
+
+def start_stale_agent_cleanup_daemon():
+    def _daemon_loop():
+        while True:
+            try:
+                # Only target agents actively stuck in a transition state
+                stuck_states = list(monitoring_states_collection.find({
+                    "current_state": {"$in": ["STARTING", "PAUSING", "RESUMING", "STOPPING"]}
+                }))
+                for doc in stuck_states:
+                    _auto_reset_stuck_state(doc)
+            except Exception as e:
+                print(f"[STALE-DAEMON] Error during cleanup: {e}")
+            time.sleep(60)
+
+    t = threading.Thread(target=_daemon_loop)
+    t.daemon = True
+    t.start()
+
+start_stale_agent_cleanup_daemon()
