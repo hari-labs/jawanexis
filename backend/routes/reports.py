@@ -1760,21 +1760,19 @@ def get_work_time_trend():
 # Public Stats (For Landing Page)
 # ─────────────────────────────────────────────────
 
-_public_stats_cache = {
-    "data": None,
+import threading
+
+_public_stats_historical_cache = {
+    "average_productivity": 0,
+    "hours_tracked": 0.0,
     "timestamp": 0
 }
+_public_stats_lock = threading.Lock()
 
-@reports_bp.route("/public-stats", methods=["GET"])
-def get_public_stats():
+def _refresh_historical_stats():
+    """Background task to recalculate heavy historical public stats."""
     try:
-        current_time = time.time()
-        if _public_stats_cache["data"] and (current_time - _public_stats_cache["timestamp"] < 300):
-            return jsonify(_public_stats_cache["data"])
-
         interns = list(users_collection.find({"role": {"$in": ["intern", "user"]}}))
-        registered_interns = len(interns)
-        
         prod_scores = []
         total_active_mins = 0.0
         for intern in interns:
@@ -1787,22 +1785,42 @@ def get_public_stats():
         avg_productivity = int(round(sum(prod_scores) / len(prod_scores))) if prod_scores else 0
         hours_tracked = round(total_active_mins / 60.0, 1)
         
+        _public_stats_historical_cache["average_productivity"] = avg_productivity
+        _public_stats_historical_cache["hours_tracked"] = hours_tracked
+        _public_stats_historical_cache["timestamp"] = time.time()
+    except Exception as e:
+        print(f"Error in background stats refresh: {e}")
+    finally:
+        _public_stats_lock.release()
+
+@reports_bp.route("/public-stats", methods=["GET"])
+def get_public_stats():
+    try:
+        current_time = time.time()
+        
+        # 1. Trigger background refresh if expired (1 hour TTL)
+        if current_time - _public_stats_historical_cache["timestamp"] > 3600:
+            if _public_stats_lock.acquire(blocking=False):
+                thread = threading.Thread(target=_refresh_historical_stats)
+                thread.daemon = True
+                thread.start()
+
+        # 2. Live fast metrics
+        registered_interns = users_collection.count_documents({"role": {"$in": ["intern", "user"]}})
         active_users = monitoring_states_collection.count_documents({"current_state": "RUNNING"})
         projects = projects_collection.count_documents({})
         screenshots_captured = screenshots_collection.count_documents({})
         
+        # 3. Assemble response preserving exact API contract
         result = {
             "registered_interns": registered_interns,
             "active_users": active_users,
             "projects": projects,
-            "average_productivity": avg_productivity,
-            "hours_tracked": hours_tracked,
+            "average_productivity": _public_stats_historical_cache["average_productivity"],
+            "hours_tracked": _public_stats_historical_cache["hours_tracked"],
             "screenshots_captured": screenshots_captured,
             "today_active_monitoring": active_users
         }
-        
-        _public_stats_cache["data"] = result
-        _public_stats_cache["timestamp"] = current_time
         
         return jsonify(result)
     except Exception as e:

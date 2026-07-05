@@ -1,6 +1,8 @@
-from pymongo import MongoClient
-from dotenv import load_dotenv
 import os
+import logging
+import threading
+from dotenv import load_dotenv
+from pymongo import MongoClient
 
 load_dotenv()
 
@@ -29,7 +31,6 @@ daily_summaries_collection = db["daily_summaries"]
 devices_collection = db["devices"]
 
 # ── Automatically Create Indexes for Dashboard Queries ──────────────────
-import threading
 
 def create_indexes_async():
     import time
@@ -50,7 +51,9 @@ def create_indexes_async():
         try:
             collection.create_index(key_or_list, **kwargs)
         except Exception:
-            pass
+            logging.exception(
+                f"Index creation failed for {collection.name}"
+            )
 
     try:
         # activities
