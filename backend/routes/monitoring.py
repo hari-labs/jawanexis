@@ -423,12 +423,18 @@ def agent_poll():
             "agent_online": True
         }
 
+        backend_state = state_doc.get("current_state", "IDLE")
+        transition_states = {"STARTING", "PAUSING", "RESUMING", "STOPPING"}
+        
         if pending:
-            # There's a command queued — keep the transition state visible in DB
-            # Don't overwrite the current_state since it's in a transition
+            # There's a command queued — log it
             print(f"[AGENT-POLL] Pending command for {device_uuid}: {pending}")
+            
+        if backend_state in transition_states:
+            # Backend Authority: Transition state is immutable until POST /confirm
+            print(f"[AGENT-POLL] {device_uuid} backend is in transition ({backend_state}). Ignoring agent local state ({agent_state}).")
         else:
-            # No command queued — reflect agent's actual local state
+            # Agent Authority: No transition, synchronize to agent's actual local state
             state_map = {
                 "ACTIVE": "RUNNING",
                 "PAUSED": "PAUSED",
@@ -438,7 +444,8 @@ def agent_poll():
             mapped = state_map.get(agent_state, "IDLE")
             update_fields["current_state"] = mapped
             state_doc["current_state"] = mapped
-            print(f"[AGENT-POLL] {device_uuid} state: agent={agent_state} -> backend={mapped}")
+            if not pending:
+                print(f"[AGENT-POLL] {device_uuid} state: agent={agent_state} -> backend={mapped}")
 
         monitoring_states_collection.update_one(
             {"_id": state_doc["_id"]},
