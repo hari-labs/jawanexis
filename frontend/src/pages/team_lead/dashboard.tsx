@@ -50,13 +50,21 @@ export function TeamLeadDashboard() {
   const currentUser = JSON.parse(localStorage.getItem("user") || "{}")
 
   const updateOwnStatus = (status: any) => {
-    setMonitoringState(status.current_state || "STOPPED")
+    let computed_state = status.actual_state || status.current_state || "STOPPED"
+    const actual = status.actual_state || "STOPPED"
+    const target = status.target_state || "STOPPED"
+    if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+    if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+    if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+    if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+    
+    setMonitoringState(computed_state)
     setAgentOnline(status.agent_online || false)
     setSessionStartTime(status.started_at || null)
     setLastSeen(status.last_seen || null)
     const serverElapsed = status.elapsed_seconds || 0
     setElapsedSeconds((prev) => {
-      if (status.current_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
+      if (computed_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
         return serverElapsed
       }
       return prev
@@ -107,7 +115,17 @@ export function TeamLeadDashboard() {
         updateOwnStatus(data.monitoring_status)
       }
       if (data.all_monitoring_statuses) {
-        setAllMonitoringStatuses(data.all_monitoring_statuses)
+        const enrichedData = data.all_monitoring_statuses.map((s: any) => {
+          let computed_state = s.actual_state || s.current_state || "STOPPED"
+          const actual = s.actual_state || "STOPPED"
+          const target = s.target_state || "STOPPED"
+          if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+          if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+          if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+          if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+          return { ...s, current_state: computed_state }
+        })
+        setAllMonitoringStatuses(enrichedData)
       }
       if (data.personal_productivity_trend) {
         setPersonalProductivityTrend(data.personal_productivity_trend)
@@ -126,8 +144,18 @@ export function TeamLeadDashboard() {
     const statusPoll = setInterval(() => {
       getAllMonitoringStatus()
         .then(data => {
-          setAllMonitoringStatuses(data)
-          const myStatus = data.find((s: any) => s.user_id === currentUser.id)
+          const enrichedData = data.map((s: any) => {
+            let computed_state = s.actual_state || s.current_state || "STOPPED"
+            const actual = s.actual_state || "STOPPED"
+            const target = s.target_state || "STOPPED"
+            if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+            if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+            if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+            if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+            return { ...s, current_state: computed_state }
+          })
+          setAllMonitoringStatuses(enrichedData)
+          const myStatus = enrichedData.find((s: any) => s.user_id === currentUser.id)
           if (myStatus) updateOwnStatus(myStatus)
         })
         .catch(err => {})

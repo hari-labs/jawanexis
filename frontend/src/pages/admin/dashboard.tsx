@@ -57,7 +57,18 @@ export function AdminDashboard() {
       setAppUsage(await getAppUsage())
       setSiteUsage(await getSiteUsage())
       setProductivityTrend(await getProductivityTrend())
-      setMonitoringStatuses(await getAllMonitoringStatus())
+      const rawStatuses = await getAllMonitoringStatus()
+      const enrichedStatuses = rawStatuses.map((s: any) => {
+        let computed_state = s.actual_state || s.current_state || "STOPPED"
+        const actual = s.actual_state || "STOPPED"
+        const target = s.target_state || "STOPPED"
+        if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+        if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+        if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+        if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+        return { ...s, current_state: computed_state }
+      })
+      setMonitoringStatuses(enrichedStatuses)
     } catch (err) {
       console.error(err)
     } finally {
@@ -71,7 +82,19 @@ export function AdminDashboard() {
     // Poll monitoring status every 15 seconds
     const statusPoll = setInterval(() => {
       getAllMonitoringStatus()
-        .then(data => setMonitoringStatuses(data))
+        .then(data => {
+          const enrichedStatuses = data.map((s: any) => {
+            let computed_state = s.actual_state || s.current_state || "STOPPED"
+            const actual = s.actual_state || "STOPPED"
+            const target = s.target_state || "STOPPED"
+            if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+            if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+            if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+            if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+            return { ...s, current_state: computed_state }
+          })
+          setMonitoringStatuses(enrichedStatuses)
+        })
         .catch(err => {})
     }, 15000)
 

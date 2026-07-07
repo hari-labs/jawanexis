@@ -61,9 +61,14 @@ def _auto_reset_stuck_state(state_doc):
     if not state_doc:
         return state_doc
 
-    current = state_doc.get("current_state", "IDLE")
+    actual = state_doc.get("actual_state", "IDLE")
+    target = state_doc.get("target_state", "IDLE")
+    
     transition_states = {"STARTING", "PAUSING", "RESUMING", "STOPPING"}
-    if current not in transition_states:
+    is_legacy_stuck = current in transition_states
+    is_split_stuck = actual != target
+    
+    if not (is_legacy_stuck or is_split_stuck):
         return state_doc
 
     lh = state_doc.get("last_heartbeat")
@@ -71,6 +76,7 @@ def _auto_reset_stuck_state(state_doc):
         # No heartbeat ever — reset to IDLE
         _reset_to_idle(state_doc)
         state_doc["current_state"] = "IDLE"
+        state_doc["target_state"] = "IDLE"
         state_doc["pending_command"] = None
         return state_doc
 
@@ -81,9 +87,10 @@ def _auto_reset_stuck_state(state_doc):
     diff = (_utcnow() - dt).total_seconds()
     if diff > 60:
         # Agent has been offline for 60s while stuck in a transition — reset
-        print(f"[AUTO-RESET] Stuck state {current} for user {state_doc.get('user_id')} — resetting to IDLE (last heartbeat {diff:.0f}s ago)")
+        print(f"[AUTO-RESET] Stuck state (actual={actual}, target={target}) for user {state_doc.get('user_id')} — resetting to IDLE (last heartbeat {diff:.0f}s ago)")
         _reset_to_idle(state_doc)
         state_doc["current_state"] = "IDLE"
+        state_doc["target_state"] = "IDLE"
         state_doc["pending_command"] = None
 
     return state_doc
@@ -101,6 +108,8 @@ def _reset_to_idle(state_doc):
         {"_id": state_doc["_id"]},
         {"$set": {
             "current_state": "IDLE",
+            "actual_state": "IDLE",
+            "target_state": "IDLE",
             "pending_command": None,
             "current_session_id": None,
             "started_at": None,
@@ -219,6 +228,7 @@ def send_command():
             {"user_id": user_id},
             {"$set": {
                 "current_state": "STARTING",
+                "target_state": "RUNNING",
                 "current_session_id": session_id,
                 "started_at": now_str,
                 "last_resumed_at": now_str,
@@ -245,6 +255,7 @@ def send_command():
             {"user_id": user_id},
             {"$set": {
                 "current_state": "PAUSING",
+                "target_state": "PAUSED",
                 "accumulated_seconds": accumulated,
                 "last_updated": now_str,
                 "pending_command": "PAUSE"
@@ -259,6 +270,7 @@ def send_command():
             {"user_id": user_id},
             {"$set": {
                 "current_state": "RESUMING",
+                "target_state": "RUNNING",
                 "last_resumed_at": now_str,
                 "last_updated": now_str,
                 "pending_command": "RESUME"
@@ -280,6 +292,7 @@ def send_command():
             {"user_id": user_id},
             {"$set": {
                 "current_state": "STOPPING",
+                "target_state": "STOPPED",
                 "current_session_id": None,
                 "started_at": None,
                 "last_resumed_at": None,
@@ -326,6 +339,8 @@ def get_all_status():
             "email": user.get("email", ""),
             "role": user.get("role", "intern"),
             "current_state": state,
+            "actual_state": state_doc.get("actual_state", "IDLE") if state_doc else "IDLE",
+            "target_state": state_doc.get("target_state", "IDLE") if state_doc else "IDLE",
             "current_session_id": session_id,
             "started_at": started_at,
             "elapsed_seconds": elapsed_seconds,
@@ -350,6 +365,8 @@ def get_status(user_id):
         return jsonify({
             "user_id": user_id,
             "current_state": "IDLE",
+            "actual_state": "IDLE",
+            "target_state": "IDLE",
             "current_session_id": None,
             "started_at": None,
             "elapsed_seconds": 0,
@@ -364,6 +381,8 @@ def get_status(user_id):
     return jsonify({
         "user_id": user_id,
         "current_state": state_doc.get("current_state", "IDLE"),
+        "actual_state": state_doc.get("actual_state", "IDLE"),
+        "target_state": state_doc.get("target_state", "IDLE"),
         "current_session_id": state_doc.get("current_session_id"),
         "started_at": state_doc.get("started_at"),
         "elapsed_seconds": elapsed_seconds,
@@ -403,6 +422,8 @@ def agent_poll():
         state_doc = {
             "user_id": user_id,
             "current_state": "IDLE",
+            "actual_state": "IDLE",
+            "target_state": "IDLE",
             "current_session_id": None,
             "started_at": None,
             "last_updated": now_str,
@@ -443,7 +464,9 @@ def agent_poll():
             }
             mapped = state_map.get(agent_state, "IDLE")
             update_fields["current_state"] = mapped
+            update_fields["actual_state"] = mapped
             state_doc["current_state"] = mapped
+            state_doc["actual_state"] = mapped
             if not pending:
                 print(f"[AGENT-POLL] {device_uuid} state: agent={agent_state} -> backend={mapped}")
 
@@ -457,17 +480,14 @@ def agent_poll():
     session_id = state_doc.get("current_session_id")
 
     if command:
-        # Clear the pending command NOW so it isn't sent twice
-        monitoring_states_collection.update_one(
-            {"_id": state_doc["_id"]},
-            {"$set": {"pending_command": None}}
-        )
         print(f"[AGENT-POLL] Dispatching command {command} to agent {device_uuid}, session={session_id}")
         
     res_data = {
         "success": True,
         "status": "approved",
         "current_state": state_doc.get("current_state", "IDLE"),
+        "actual_state": state_doc.get("actual_state", "IDLE"),
+        "target_state": state_doc.get("target_state", "IDLE"),
         "current_session_id": session_id,
         "command": command
     }
@@ -504,13 +524,23 @@ def agent_confirm():
     }
     backend_state = state_map.get(confirmed_state, "IDLE")
 
+    state_doc = monitoring_states_collection.find_one({"user_id": user_id})
+
     update_fields = {
         "current_state": backend_state,
+        "actual_state": backend_state,
         "last_heartbeat": now_str,
         "agent_online": True,
-        "pending_command": None,
         "last_updated": now_str
     }
+
+    # Split-State Ack: Only clear pending command if actual_state matches target_state
+    if state_doc:
+        target_state = state_doc.get("target_state", "IDLE")
+        if backend_state == target_state:
+            update_fields["pending_command"] = None
+    else:
+        update_fields["pending_command"] = None
 
     if backend_state == "RUNNING":
         update_fields["last_resumed_at"] = now_str

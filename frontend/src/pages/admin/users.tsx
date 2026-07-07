@@ -850,7 +850,17 @@ export function UsersList() {
     Promise.all([getUsers(), getAllMonitoringStatus().catch(() => [])])
       .then(([usersData, monitoringData]) => {
         setUsers(usersData)
-        setAllMonitoring(monitoringData)
+        const enrichedMonitoring = monitoringData.map((s: any) => {
+          let computed_state = s.actual_state || s.current_state || "STOPPED"
+          const actual = s.actual_state || "STOPPED"
+          const target = s.target_state || "STOPPED"
+          if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+          if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+          if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+          if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+          return { ...s, current_state: computed_state }
+        })
+        setAllMonitoring(enrichedMonitoring)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -878,7 +888,17 @@ export function UsersList() {
       setUserTasks(tasksData)
       setUserEvidence(evidenceData)
       setAllUsers(usersData)
-      setAllMonitoring(monitoringData)
+      const enrichedMonitoring = monitoringData.map((s: any) => {
+        let computed_state = s.actual_state || s.current_state || "STOPPED"
+        const actual = s.actual_state || "STOPPED"
+        const target = s.target_state || "STOPPED"
+        if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+        if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+        if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+        if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+        return { ...s, current_state: computed_state }
+      })
+      setAllMonitoring(enrichedMonitoring)
     } catch (e) {
       console.error("Error loading user analytics", e)
     } finally {

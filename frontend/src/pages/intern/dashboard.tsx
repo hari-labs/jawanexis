@@ -67,14 +67,22 @@ export function InternDashboard() {
       
       if (data.monitoring_status) {
         const status = data.monitoring_status
-        setMonitoringState(status.current_state || "STOPPED")
+        let computed_state = status.actual_state || "STOPPED"
+        const actual = status.actual_state || "STOPPED"
+        const target = status.target_state || "STOPPED"
+        if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+        if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+        if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+        if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+        
+        setMonitoringState(computed_state)
         setAgentOnline(status.agent_online || false)
         setSessionStartTime(status.started_at || null)
         setLastSeen(status.last_seen || null)
         
         const serverElapsed = status.elapsed_seconds || 0
         setElapsedSeconds((prev) => {
-          if (status.current_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
+          if (computed_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
             return serverElapsed
           }
           return prev
@@ -139,14 +147,22 @@ export function InternDashboard() {
     const statusPoll = setInterval(() => {
       getMonitoringStatus(userId)
         .then(status => {
-          setMonitoringState(status.current_state || "STOPPED")
+          let computed_state = status.actual_state || "STOPPED"
+          const actual = status.actual_state || "STOPPED"
+          const target = status.target_state || "STOPPED"
+          if (actual === "IDLE" && target === "RUNNING") computed_state = "STARTING"
+          if (actual === "RUNNING" && target === "PAUSED") computed_state = "PAUSING"
+          if (actual === "PAUSED" && target === "RUNNING") computed_state = "RESUMING"
+          if (actual === "RUNNING" && target === "STOPPED") computed_state = "STOPPING"
+
+          setMonitoringState(computed_state)
           setAgentOnline(status.agent_online || false)
           setSessionStartTime(status.started_at || null)
           setLastSeen(status.last_seen || null)
           
           const serverElapsed = status.elapsed_seconds || 0
           setElapsedSeconds((prev) => {
-            if (status.current_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
+            if (computed_state !== "RUNNING" || Math.abs(prev - serverElapsed) > 2 || prev === 0) {
               return serverElapsed
             }
             return prev
