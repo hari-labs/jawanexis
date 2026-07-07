@@ -63,9 +63,10 @@ def _auto_reset_stuck_state(state_doc):
 
     actual = state_doc.get("actual_state", "IDLE")
     target = state_doc.get("target_state", "IDLE")
+    current_state = state_doc.get("current_state", "IDLE")
     
     transition_states = {"STARTING", "PAUSING", "RESUMING", "STOPPING"}
-    is_legacy_stuck = current in transition_states
+    is_legacy_stuck = current_state in transition_states
     is_split_stuck = actual != target
     
     if not (is_legacy_stuck or is_split_stuck):
