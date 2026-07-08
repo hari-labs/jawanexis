@@ -1,36 +1,23 @@
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 def send_invitation_email(email_address, role, activation_link):
-    server = os.getenv("MAIL_SERVER")
-    port_val = os.getenv("MAIL_PORT")
-    username = os.getenv("MAIL_USERNAME")
-    password = os.getenv("MAIL_PASSWORD")
-    use_tls = os.getenv("MAIL_USE_TLS", "False").lower() in ("true", "1", "yes")
-    use_ssl = os.getenv("MAIL_USE_SSL", "False").lower() in ("true", "1", "yes")
-    default_sender = os.getenv("MAIL_DEFAULT_SENDER", username)
+    api_key = os.getenv("RESEND_API_KEY")
+    default_sender = os.getenv("MAIL_DEFAULT_SENDER", "onboarding@resend.dev")
 
-    if not server or not port_val:
-        print("[SMTP] Mail configuration missing server or port.")
-        return False, "SMTP configuration missing server or port"
-
-    try:
-        port = int(port_val)
-    except ValueError:
-        return False, "Invalid port value"
+    if not api_key:
+        print("[EMAIL] RESEND_API_KEY not configured.")
+        return False, "RESEND_API_KEY not configured"
 
     # Derive name from email prefix
     user_name = email_address.split('@')[0].replace('.', ' ').replace('_', ' ').title()
     role_name = "Team Lead" if role == "team_lead" else "Intern"
 
     subject = "Workforce Monitoring System - Account Invitation"
-    
-    # HTML template matching the requirement exactly
+
     html_body = f"""<html>
 <body>
 <p>Hello {user_name},</p>
@@ -43,47 +30,30 @@ def send_invitation_email(email_address, role, activation_link):
 </body>
 </html>"""
 
-    # Plain text version for fallback
-    text_body = f"""Hello {user_name},
-
-You have been invited to join the Workforce Monitoring System.
-
-Role:
-{role_name}
-
-Activation Link:
-{activation_link}
-
-This invitation expires in 7 days.
-
-Regards,
-Workforce Monitoring System"""
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = default_sender
-    msg["To"] = email_address
-
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
     try:
-        if use_ssl:
-            smtp = smtplib.SMTP_SSL(server, port, timeout=10)
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "from": default_sender,
+                "to": [email_address],
+                "subject": subject,
+                "html": html_body
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            print(f"[EMAIL] Invitation sent to {email_address} via Resend.")
+            return True, "Success"
         else:
-            smtp = smtplib.SMTP(server, port, timeout=10)
-            
-        if use_tls:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
+            error_detail = response.text
+            print(f"[EMAIL] Resend API error ({response.status_code}): {error_detail}")
+            return False, f"Resend API error ({response.status_code}): {error_detail}"
 
-        if username and password:
-            smtp.login(username, password)
-
-        smtp.sendmail(default_sender, email_address, msg.as_string())
-        smtp.quit()
-        return True, "Success"
     except Exception as e:
-        print("[SMTP] Error sending email:", e)
+        print(f"[EMAIL] Error sending email via Resend: {e}")
         return False, str(e)
